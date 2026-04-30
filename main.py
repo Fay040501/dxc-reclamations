@@ -351,6 +351,7 @@ async def api_stats(
 # ============================================================
 @app.post("/api/assigner-nombre")
 async def api_assigner_nombre(request: Request):
+    import traceback, logging
     user = get_current_user(request)
     if not user or user["role"] != "admin":
         raise HTTPException(status_code=403)
@@ -416,11 +417,16 @@ async def api_assigner_nombre(request: Request):
     sql_update = """UPDATE tb_reclamations
                     SET assigne_a = %s, statut_traitement = 'ASSIGNE', date_assignation = %s
                     WHERE id_hash IN ({{placeholders}})"""
-    rows = execute_db_transaction(
-        sql_select, params,
-        sql_update, [assigne_a, datetime.now()]
-    )
-    return {"assigned": len(rows)}
+    try:
+        rows = execute_db_transaction(
+            sql_select, params,
+            sql_update, [assigne_a, datetime.now()]
+        )
+        return {"assigned": len(rows)}
+    except Exception as e:
+        logging.error(f"DISPATCH ERROR: {e}")
+        logging.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/desassigner")
