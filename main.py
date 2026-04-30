@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Request, Form, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse, JSONResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from database import query_db, execute_db, execute_many, execute_db_transaction
@@ -99,7 +99,6 @@ async def login_submit(request: Request, login: str = Form(...), password: str =
 
 @app.get("/favicon.ico")
 async def favicon():
-    from fastapi.responses import Response
     return Response(status_code=204)
 
 
