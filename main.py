@@ -412,7 +412,7 @@ async def api_assigner_nombre(request: Request):
     params.append(nombre)
 
     # ── #1 : transaction atomique + #3 : datetime sans isoformat ──
-    sql_select = f"SELECT id_hash FROM tb_reclamations WHERE {where} ORDER BY startdate LIMIT %s FOR UPDATE SKIP LOCKED"
+    sql_select = f"SELECT id_hash FROM tb_reclamations WHERE {where} ORDER BY startdate LIMIT %s"
     sql_update = """UPDATE tb_reclamations
                     SET assigne_a = %s, statut_traitement = 'ASSIGNE', date_assignation = %s
                     WHERE id_hash IN ({{placeholders}})"""

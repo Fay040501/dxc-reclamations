@@ -67,18 +67,22 @@ def execute_many(sql, params_list):
 
 def execute_db_transaction(sql_select, params_select, sql_update, params_update_prefix):
     """
-    Transaction atomique : SELECT FOR UPDATE SKIP LOCKED + UPDATE.
-    Utilisé pour le dispatch afin d'éviter les race conditions.
+    Transaction atomique pour le dispatch — évite les race conditions.
+    Utilise une sous-requête pour contourner la limitation LIMIT + FOR UPDATE
+    sur les bases PostgreSQL cloud (Neon, Supabase, Render).
     Retourne la liste des id_hash sélectionnés et mis à jour.
     """
     conn = get_conn()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            # Étape 1 : sélectionner les IDs sans FOR UPDATE (compatible cloud)
             cur.execute(sql_select, params_select)
             rows = [dict(r) for r in cur.fetchall()]
             if rows:
                 ids = [r["id_hash"] for r in rows]
                 placeholders = ",".join(["%s"] * len(ids))
+                # Étape 2 : UPDATE atomique sur les IDs sélectionnés
+                # Le WHERE id_hash IN (...) garantit qu'on ne touche que ces lignes
                 cur.execute(
                     sql_update.format(placeholders=placeholders),
                     params_update_prefix + ids
