@@ -1,0 +1,1287 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DXC Réclamations · Back-office</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/styles.css">
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin></script>
+</head>
+<body>
+<div id="root"></div>
+
+<script>
+window.CURRENT_USER = {{ user_json|safe }};
+window.UTILISATEURS = {{ utilisateurs_json|safe }};
+window.SOUS_MOTIFS = {{ sous_motifs_json|safe }};
+window.PRELOADED_FILTERS = {{ filters_json|safe }};
+window.DEFAULT_ANNEE = "{{ default_annee }}";
+window.DEFAULT_MOIS = "{{ default_mois }}";
+</script>
+
+<script type="text/babel" data-presets="env,react">
+{% raw %}
+const { useState, useEffect, useRef, useCallback, useMemo, Fragment } = React;
+
+const initials = (nom) => (nom||'').split(' ').map(s=>s[0]).filter(Boolean).slice(0,2).join('').toUpperCase();
+
+// =================== Icons ===================
+const Icon = ({ name, size = 16 }) => {
+  const paths = {
+    inbox: 'M3 13l3-8h8l3 8M3 13v3a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3M3 13h4l1 2h4l1-2h4',
+    chart: 'M3 17V9M9 17V5M15 17v-6M3 17h14',
+    trash: 'M5 6h10M8 6V4h4v2M6 6l1 11a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1l1-11M9 10v5M11 10v5',
+    out: 'M12 14l3-3-3-3M15 11H7M9 4H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h4',
+    search: 'M9 15a6 6 0 1 0 0-12 6 6 0 0 0 0 12zM17 17l-3.5-3.5',
+    chevron: 'M7 4l5 6-5 6',
+    download: 'M10 3v10M5 9l5 5 5-5M3 17h14',
+    filter: 'M3 4h14l-5 7v5l-4-2v-3L3 4z',
+    refresh: 'M4 10a6 6 0 0 1 11-4M16 4v3h-3M16 10a6 6 0 0 1-11 4M4 16v-3h3',
+    check: 'M4 10l4 4 8-8',
+    arrow: 'M4 10h12M11 5l5 5-5 5',
+    settings: 'M10 13a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM10 2v2M10 16v2M4.2 4.2l1.4 1.4M14.4 14.4l1.4 1.4M2 10h2M16 10h2M4.2 15.8l1.4-1.4M14.4 5.6l1.4-1.4',
+  };
+  return <svg className="ico" width={size} height={size} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d={paths[name]||paths.inbox} /></svg>;
+};
+
+// =================== Atoms ===================
+const Button = ({ variant='secondary', size, icon, children, ...rest }) => (
+  <button className={`btn btn-${variant} ${size==='sm'?'btn-sm':''}`} {...rest}>
+    {icon && <Icon name={icon} size={size==='sm'?12:14} />}
+    {children}
+  </button>
+);
+
+const Badge = ({ tone='neutral', dot=false, children }) => (
+  <span className={`badge b-${tone}`}>{dot && <span className="dot" />}{children}</span>
+);
+
+const StatutBadge = ({ statut }) => {
+  if (statut === 'NON ASSIGNE') return <Badge tone="neutral" dot>Non assignée</Badge>;
+  if (statut === 'ASSIGNE') return <Badge tone="info" dot>Assignée</Badge>;
+  if (statut === 'TRAITE') return <Badge tone="success" dot>Traitée</Badge>;
+  return <Badge tone="neutral">{statut}</Badge>;
+};
+
+const Sparkline = ({ values, color='var(--accent)' }) => {
+  if (!values || values.length<2) return null;
+  const max = Math.max(...values, 1);
+  const w=64, h=28;
+  const pts = values.map((v,i) => `${(i/(values.length-1))*w},${h-(v/max)*(h-4)-2}`).join(' ');
+  return <svg className="kpi-spark" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none"><polyline points={pts} fill="none" stroke={color} strokeWidth="1.5" strokeLinejoin="round"/></svg>;
+};
+
+const Kpi = ({ label, value, unit, hint, accent, spark, sparkColor }) => (
+  <div className={`kpi ${accent?'accent':''}`}>
+    <div className="kpi-label">{label}</div>
+    <div className="kpi-value">{value}{unit && <span className="unit">{unit}</span>}</div>
+    {hint && <div className="kpi-meta"><span>{hint}</span></div>}
+    {spark && <Sparkline values={spark} color={sparkColor}/>}
+  </div>
+);
+
+// =================== MultiSelect Dropdown ===================
+const MultiSelect = ({ label, options, selected, onChange, placeholder='— Sélectionner —' }) => {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    const close = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, []);
+  const toggle = (val) => {
+    onChange(selected.includes(val) ? selected.filter(v=>v!==val) : [...selected, val]);
+  };
+  const totalCount = selected.reduce((s, key) => {
+    const opt = options.find(o => o[0] === key);
+    return s + (opt ? opt[1] : 0);
+  }, 0);
+  const summary = selected.length === 0 ? placeholder
+    : selected.length === 1 ? `${selected[0]==='__NULL__'?'(non renseigné)':selected[0]} (${totalCount})`
+    : `${selected.length} sélectionnés (${totalCount})`;
+  return (
+    <div ref={ref} style={{position:'relative', minWidth:280, flex:1}}>
+      {label && <div style={{fontSize:10, fontWeight:700, textTransform:'uppercase', letterSpacing:'.8px', color:'var(--muted)', marginBottom:4}}>{label}</div>}
+      <div onClick={()=>setOpen(!open)} style={{
+        padding:'7px 12px', border:'1.5px solid '+(open?'var(--accent)':'#e0e0e0'), borderRadius:8, fontSize:13, cursor:'pointer',
+        background:'#fff', display:'flex', justifyContent:'space-between', alignItems:'center'
+      }}>
+        <span style={{color: selected.length?'#1a1a1a':'#999', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{summary}</span>
+        <span style={{transform: open?'rotate(90deg)':'rotate(0)', transition:'transform .2s', marginLeft:8, color:'#999'}}>▸</span>
+      </div>
+      {open && (
+        <div style={{
+          position:'absolute', top:'100%', left:0, right:0, zIndex:50, marginTop:4,
+          background:'#fff', border:'1.5px solid #e0e0e0', borderRadius:8,
+          boxShadow:'0 8px 24px rgba(0,0,0,.12)', maxHeight:220, overflowY:'auto'
+        }}>
+          {selected.length > 0 && (
+            <div onClick={()=>onChange([])} style={{padding:'6px 12px', fontSize:11, color:'#FF7900', cursor:'pointer', borderBottom:'1px solid #eee', fontWeight:600}}>
+              Tout désélectionner
+            </div>
+          )}
+          {options.map(([val, cnt]) => {
+            const active = selected.includes(val);
+            const dl = val==='__NULL__' ? '(non renseigné)' : val;
+            return (
+              <div key={val} onClick={()=>toggle(val)} style={{
+                padding:'7px 12px', fontSize:12, cursor:'pointer', display:'flex', justifyContent:'space-between', alignItems:'center',
+                background: active ? 'rgba(255,121,0,0.06)' : '#fff'
+              }}>
+                <span style={{display:'flex', alignItems:'center', gap:8}}>
+                  <span style={{
+                    width:16, height:16, borderRadius:4, border: active?'none':'1.5px solid #ccc',
+                    background: active?'#FF7900':'#fff', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0
+                  }}>
+                    {active && <svg width="10" height="10" viewBox="0 0 20 20" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round"><path d="M4 10l4 4 8-8"/></svg>}
+                  </span>
+                  <span style={{color: active?'#FF7900':'#1a1a1a', fontWeight: active?600:400}}>{dl}</span>
+                </span>
+                <span style={{fontSize:11, color:'#999', fontWeight:500}}>{cnt}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+};
+
+const Card = ({ title, sub, action, flush, children }) => (
+  <div className="card">
+    {(title || action) && (
+      <div className="card-head">
+        <div>{title && <h3>{title}</h3>}{sub && <div className="sub">{sub}</div>}</div>
+        {action}
+      </div>
+    )}
+    <div className={`card-body ${flush?'flush':''}`}>{children}</div>
+  </div>
+);
+
+const Field = ({ label, children }) => (
+  <label className="field">{label && <span>{label}</span>}{children}</label>
+);
+
+const Avatar = ({ initials: ini }) => <span className="avatar">{ini}</span>;
+
+const Progress = ({ value, green }) => (
+  <div className="progress">
+    <div className={`progress-bar ${green?'green':''}`}><span style={{width:`${Math.min(100,value)}%`}}/></div>
+    <span className="progress-val">{Math.round(value)}%</span>
+  </div>
+);
+
+// =================== Sidebar / Topbar / Filters ===================
+const NAV_ADMIN = [
+  { id: 'general', label: "Vue d'ensemble", icon: 'inbox' },
+  { id: 'corbeille', label: 'Corbeille', icon: 'trash' },
+  { id: 'dashboard', label: 'Dashboard', icon: 'chart' },
+];
+const NAV_USER = [
+  { id: 'general', label: 'Mes réclamations', icon: 'inbox' },
+  { id: 'dashboard', label: 'Dashboard', icon: 'chart' },
+];
+
+function Sidebar({ user, page, setPage, counts }) {
+  const isAdmin = user.role === 'admin';
+  const links = isAdmin ? NAV_ADMIN : NAV_USER;
+  return (
+    <aside className="sidebar">
+      <div className="sb-brand">
+        <div className="mark">DX</div>
+        <div><div className="name">Réclamations</div><div className="sub">Back-office</div></div>
+      </div>
+      <div className="sb-section">Espace</div>
+      <nav className="sb-nav">
+        {links.map(l => (
+          <div key={l.id} className={`sb-link ${page===l.id?'active':''}`} onClick={()=>setPage(l.id)}>
+            <Icon name={l.icon} />
+            <span>{l.label}</span>
+            {counts[l.id] != null && <span className="count">{counts[l.id]}</span>}
+          </div>
+        ))}
+      </nav>
+      <div className="sb-section">Compte</div>
+      <div className="sb-user">
+        <div className="av">{initials(user.nom_complet)}</div>
+        <div className="info">
+          <div className="un">{user.nom_complet}</div>
+          <div className="ur">{isAdmin?'Administrateur':'Agent BO'}</div>
+        </div>
+        <a className="out" href="/logout" title="Déconnexion"><Icon name="out"/></a>
+      </div>
+    </aside>
+  );
+}
+
+function Topbar({ title, breadcrumb }) {
+  const now = new Date().toLocaleString('fr-FR', { dateStyle:'medium', timeStyle:'short' });
+  return (
+    <div className="topbar">
+      <div className="tb-left">
+        <div className="tb-crumb">{breadcrumb} <b>· {title}</b></div>
+      </div>
+      <div className="tb-right">
+        <div className="tb-time">{now}</div>
+      </div>
+    </div>
+  );
+}
+
+function Filters({ filters, setFilters, options, withSearch=true, isUser=false }) {
+  const update = patch => setFilters({...filters, ...patch});
+  const hasFilters = Object.values(filters).some(v => v && v!=='');
+  return (
+    <div className="filters">
+      <Icon name="filter" size={14} />
+      <div className="group">
+        <label>Année</label>
+        <select className="select" value={filters.annee||''} onChange={e=>update({annee:e.target.value, mois:'', jour:''})}>
+          <option value="">Toutes</option>
+          {(options.annees||[]).map(a=><option key={a} value={a}>{a}</option>)}
+        </select>
+      </div>
+      <div className="group">
+        <label>Mois</label>
+        <select className="select" value={filters.mois||''} onChange={e=>update({mois:e.target.value, jour:''})}>
+          <option value="">Tous</option>
+          {(options.mois||[]).map(m=><option key={m} value={m}>{m}</option>)}
+        </select>
+      </div>
+      <div className="group">
+        <label>Jour</label>
+        <select className="select" value={filters.jour||''} onChange={e=>update({jour:e.target.value})}>
+          <option value="">Tous</option>
+          {Array.from({length:31},(_,i)=>String(i+1).padStart(2,'0')).map(d=><option key={d} value={d}>{d}</option>)}
+        </select>
+      </div>
+      <div className="divider"/>
+      <div className="group">
+        <label>Campagne</label>
+        <select className="select" value={filters.campagne||''} onChange={e=>update({campagne:e.target.value})}>
+          <option value="">Toutes</option>
+          {(options.campagnes||[]).map(c=><option key={c} value={c}>{c}</option>)}
+        </select>
+      </div>
+      {!isUser && (
+        <div className="group">
+          <label>Statut</label>
+          <select className="select" value={filters.statut||''} onChange={e=>update({statut:e.target.value})}>
+            <option value="">Tous</option>
+            <option value="NON ASSIGNE">Non assignée</option>
+            <option value="ASSIGNE">Assignée</option>
+            <option value="TRAITE">Traitée</option>
+          </select>
+        </div>
+      )}
+      {withSearch && (
+        <>
+          <div className="divider"/>
+          <div className="group" style={{flex:1}}>
+            <input className="input search" placeholder="ND, client, motif…" value={filters.search||''} onChange={e=>update({search:e.target.value})}/>
+          </div>
+        </>
+      )}
+      {hasFilters && <button className="clear" onClick={()=>setFilters({ annee: DEFAULT_ANNEE, mois: DEFAULT_MOIS })}>Effacer</button>}
+    </div>
+  );
+}
+
+// =================== Helpers data ===================
+const buildQS = (filters) => {
+  const p = new URLSearchParams();
+  const SKIP = new Set(['search']);
+  Object.entries(filters||{}).forEach(([k,v])=>{ if(v && !SKIP.has(k)) p.append(k,v); });
+  return p.toString();
+};
+
+// ── Gestion globale erreurs réseau + session ──
+const AppContext = React.createContext({});
+
+function AppProvider({ children }) {
+  const [toast, setToast] = useState(null);       // { type: 'error'|'success'|'warn', msg }
+  const [sessionExpired, setSessionExpired] = useState(false);
+
+  // ── Gestion inactivité 2h + refresh token automatique ──
+  const INACTIVITY_LIMIT = 2 * 60 * 60 * 1000; // 2 heures en ms
+  const REFRESH_INTERVAL = 15 * 60 * 1000;      // Refresh toutes les 15 min si actif
+  const inactivityTimer = React.useRef(null);
+  const lastRefresh = React.useRef(Date.now());
+
+  const resetInactivityTimer = React.useCallback(() => {
+    if (sessionExpired) return;
+    // Annuler le timer précédent
+    if (inactivityTimer.current) clearTimeout(inactivityTimer.current);
+    // Relancer le timer d'inactivité
+    inactivityTimer.current = setTimeout(() => {
+      setSessionExpired(true);
+    }, INACTIVITY_LIMIT);
+    // Rafraîchir le token si 15 min écoulées depuis le dernier refresh
+    const now = Date.now();
+    if (now - lastRefresh.current >= REFRESH_INTERVAL) {
+      lastRefresh.current = now;
+      fetch('/api/refresh-token', { method:'POST' }).catch(()=>{});
+    }
+  }, [sessionExpired]);
+
+  React.useEffect(() => {
+    const events = ['mousemove', 'mousedown', 'keypress', 'touchstart', 'scroll', 'click'];
+    events.forEach(e => window.addEventListener(e, resetInactivityTimer, { passive: true }));
+    // Démarrer le timer au montage
+    resetInactivityTimer();
+    return () => {
+      events.forEach(e => window.removeEventListener(e, resetInactivityTimer));
+      if (inactivityTimer.current) clearTimeout(inactivityTimer.current);
+    };
+  }, [resetInactivityTimer]);
+
+  const showToast = (type, msg, duration=4000) => {
+    setToast({ type, msg });
+    if (duration > 0) setTimeout(() => setToast(null), duration);
+  };
+
+  const apiFetch = async (url, options={}) => {
+    try {
+      const res = await fetch(url, options);
+      if (res.status === 401) {
+        setSessionExpired(true);
+        throw new Error('SESSION_EXPIRED');
+      }
+      if (res.status === 403) {
+        showToast('error', 'Action non autorisée sur cette réclamation.');
+        throw new Error('FORBIDDEN');
+      }
+      if (res.status === 422) {
+        const data = await res.json().catch(()=>({}));
+        showToast('error', data.detail || 'Données invalides — vérifiez le formulaire.');
+        throw new Error('VALIDATION_ERROR');
+      }
+      if (!res.ok) {
+        showToast('error', `Erreur serveur (${res.status}) — contactez l'administrateur.`);
+        throw new Error(`HTTP_${res.status}`);
+      }
+      return res;
+    } catch (err) {
+      if (err.message === 'SESSION_EXPIRED' || err.message === 'FORBIDDEN' || err.message === 'VALIDATION_ERROR') throw err;
+      if (err.name === 'AbortError') throw err;
+      showToast('error', 'Erreur réseau — vérifiez votre connexion au réseau interne.');
+      throw err;
+    }
+  };
+
+  return (
+    <AppContext.Provider value={{ showToast, apiFetch }}>
+      {children}
+      {toast && (
+        <div style={{
+          position:'fixed', top:16, right:16, zIndex:9999,
+          background: toast.type==='success'?'#d4edda': toast.type==='warn'?'#fff3cd':'#f8d7da',
+          border: `1.5px solid ${toast.type==='success'?'#28a745':toast.type==='warn'?'#ffc107':'#dc3545'}`,
+          color: toast.type==='success'?'#155724':toast.type==='warn'?'#856404':'#721c24',
+          borderRadius:10, padding:'12px 18px', fontSize:13, fontWeight:500,
+          boxShadow:'0 4px 20px rgba(0,0,0,.15)', maxWidth:380, display:'flex', alignItems:'center', gap:10
+        }}>
+          <span>{toast.type==='success'?'✅':toast.type==='warn'?'⚠️':'❌'}</span>
+          <span style={{flex:1}}>{toast.msg}</span>
+          <span style={{cursor:'pointer', opacity:.6, fontWeight:700}} onClick={()=>setToast(null)}>✕</span>
+        </div>
+      )}
+      {sessionExpired && (
+        <div style={{
+          position:'fixed', inset:0, zIndex:99999,
+          background:'rgba(0,0,0,.65)', display:'flex', alignItems:'center', justifyContent:'center'
+        }}>
+          <div style={{
+            background:'#fff', borderRadius:14, padding:'36px 40px', maxWidth:420, textAlign:'center',
+            boxShadow:'0 8px 40px rgba(0,0,0,.3)'
+          }}>
+            <div style={{fontSize:40, marginBottom:12}}>🔒</div>
+            <h2 style={{margin:'0 0 10px', fontSize:18, color:'#1a1a1a'}}>Session expirée</h2>
+            <p style={{color:'#666', fontSize:14, margin:'0 0 24px', lineHeight:1.5}}>
+              Aucune activité détectée depuis 2 heures.<br/>
+              Veuillez vous reconnecter pour continuer.
+            </p>
+            <a href="/login" style={{
+              display:'inline-block', background:'#FF7900', color:'#fff',
+              padding:'10px 28px', borderRadius:8, fontWeight:700, fontSize:14,
+              textDecoration:'none'
+            }}>Se reconnecter</a>
+          </div>
+        </div>
+      )}
+    </AppContext.Provider>
+  );
+}
+
+const filterSearch = (data, search) => {
+  if (!search) return data;
+  const s = search.toLowerCase();
+  return data.filter(r => JSON.stringify(r).toLowerCase().includes(s));
+};
+
+// =================== Charts (SVG natifs) ===================
+function GaugeChart({ value, color='var(--accent)' }) {
+  const r = 70;
+  const circ = Math.PI * r;
+  const offset = circ - (value/100) * circ;
+  return (
+    <div className="gauge">
+      <svg className="gauge-svg" viewBox="0 0 200 110">
+        <path d="M 30 100 A 70 70 0 0 1 170 100" fill="none" stroke="var(--bg-sunken)" strokeWidth="14" strokeLinecap="round"/>
+        <path d="M 30 100 A 70 70 0 0 1 170 100" fill="none" stroke={color} strokeWidth="14" strokeLinecap="round" strokeDasharray={circ} strokeDashoffset={offset}/>
+      </svg>
+      <div className="gauge-val">{value}<span style={{fontSize:18, color:'var(--ink-4)'}}>%</span></div>
+      <div className="gauge-lbl">Taux de traitement</div>
+    </div>
+  );
+}
+
+function HBar({ labels, traite, non, max }) {
+  return (
+    <div style={{display:'flex',flexDirection:'column',gap:12}}>
+      {labels.map((l,i)=>{
+        const t=traite[i]||0, n=non[i]||0, total=t+n;
+        return (
+          <div key={l}>
+            <div style={{display:'flex',justifyContent:'space-between',fontSize:12,marginBottom:4}}>
+              <span style={{color:'var(--ink-2)',fontWeight:500}}>{l}</span>
+              <span className="mono" style={{color:'var(--ink-4)'}}>{total}</span>
+            </div>
+            <div style={{display:'flex',height:8,borderRadius:4,overflow:'hidden',background:'var(--bg-sunken)'}}>
+              <div style={{width:`${(t/max)*100}%`,background:'var(--success)'}} title={`Traité: ${t}`}/>
+              <div style={{width:`${(n/max)*100}%`,background:'var(--accent)'}} title={`Non traité: ${n}`}/>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function LineChart({ data }) {
+  const entries = Object.entries(data);
+  if (entries.length < 2) return <div className="empty">Pas assez de données</div>;
+  const max = Math.max(...entries.map(([,v])=>v), 1);
+  const w=600, h=200, pad=24;
+  const xs = entries.map((_,i)=>pad+(i/(entries.length-1))*(w-2*pad));
+  const ys = entries.map(([,v])=>h-pad-(v/max)*(h-2*pad));
+  const path = xs.map((x,i)=>`${i===0?'M':'L'} ${x} ${ys[i]}`).join(' ');
+  const fill = path + ` L ${xs[xs.length-1]} ${h-pad} L ${xs[0]} ${h-pad} Z`;
+  return (
+    <div style={{width:'100%',height:240}}>
+      <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" width="100%" height="100%">
+        {[0.25,0.5,0.75].map(p=><line key={p} x1={pad} x2={w-pad} y1={pad+p*(h-2*pad)} y2={pad+p*(h-2*pad)} stroke="var(--line)" strokeDasharray="2 4"/>)}
+        <path d={fill} fill="rgba(255,121,0,0.08)"/>
+        <path d={path} fill="none" stroke="var(--accent)" strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round"/>
+      </svg>
+    </div>
+  );
+}
+
+function DonutN1N2({ n1, n2 }) {
+  const total = n1+n2 || 1;
+  const r=60, circ=2*Math.PI*r;
+  const p1 = (n1/total)*circ;
+  return (
+    <div style={{display:'flex',flexDirection:'column',alignItems:'center',padding:16}}>
+      <svg viewBox="0 0 200 200" width="180" height="180" style={{transform:'rotate(-90deg)'}}>
+        <circle cx="100" cy="100" r={r} fill="none" stroke="var(--success)" strokeWidth="20" strokeDasharray={`${p1} ${circ}`}/>
+        <circle cx="100" cy="100" r={r} fill="none" stroke="var(--accent)" strokeWidth="20" strokeDasharray={`${(n2/total)*circ} ${circ}`} strokeDashoffset={-p1}/>
+      </svg>
+      <div style={{display:'flex',gap:16,marginTop:12,fontSize:12}}>
+        <div className="row"><span style={{width:10,height:10,background:'var(--success)',borderRadius:2}}/> Niveau 1 · {n1}</div>
+        <div className="row"><span style={{width:10,height:10,background:'var(--accent)',borderRadius:2}}/> Niveau 2 · {n2}</div>
+      </div>
+    </div>
+  );
+}
+
+// =================== Page : Admin General ===================
+function AdminGeneral() {
+  const [filters, setFilters] = useState({ annee: DEFAULT_ANNEE, mois: DEFAULT_MOIS });
+  const [data, setData] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  // Dispatcher CATEGORIE (indépendant, multi-select)
+  const [catSelected, setCatSelected] = useState([]);
+  const [catNombre, setCatNombre] = useState('');
+  const [catAgent, setCatAgent] = useState(Object.keys(UTILISATEURS)[0]||'');
+  const [catLoading, setCatLoading] = useState(false);
+
+  // Dispatcher MOTIF (indépendant, multi-select)
+  const [motSelected, setMotSelected] = useState([]);
+  const [motNombre, setMotNombre] = useState('');
+  const [motAgent, setMotAgent] = useState(Object.keys(UTILISATEURS)[0]||'');
+  const [motLoading, setMotLoading] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const res = await fetch('/api/reclamations?'+buildQS(filters));
+    let d = await res.json();
+    setData(filterSearch(d, filters.search));
+    setLoading(false);
+  }, [filters]);
+
+  useEffect(()=>{ load(); }, [load]);
+
+  const total = data.length;
+  const na = data.filter(r=>r.statut_traitement==='NON ASSIGNE').length;
+  const ass = data.filter(r=>r.statut_traitement==='ASSIGNE').length;
+  const tr = data.filter(r=>r.statut_traitement==='TRAITE').length;
+
+  const handleDesassign = async (id_hash) => {
+    await fetch('/api/desassigner', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({id_hash}) });
+    load();
+  };
+
+  // Comptes par catégorie et par motif (NON ASSIGNÉES uniquement)
+  const { catCounts, motCounts } = useMemo(() => {
+    const catCounts = {};
+    const motCounts = {};
+    data.filter(r => r.statut_traitement === 'NON ASSIGNE').forEach(r => {
+      const cat = r.categorie_de_non_paiement;
+      const mot = r.motif_non_paiement;
+      const catKey = cat || '__NULL__';
+      const motKey = mot || '__NULL__';
+      catCounts[catKey] = (catCounts[catKey] || 0) + 1;
+      motCounts[motKey] = (motCounts[motKey] || 0) + 1;
+    });
+    return { catCounts, motCounts };
+  }, [data]);
+
+  const catOptions = Object.entries(catCounts).sort((a,b)=>b[1]-a[1]);
+  const motOptions = Object.entries(motCounts).sort((a,b)=>b[1]-a[1]);
+  const catVolume = catSelected.length > 0 ? catSelected.reduce((sum, c) => sum + (catCounts[c] || 0), 0) : null;
+  const motVolume = motSelected.length > 0 ? motSelected.reduce((sum, m) => sum + (motCounts[m] || 0), 0) : null;
+
+  const { apiFetch, showToast } = React.useContext(AppContext);
+
+  const handleDispatchCat = async () => {
+    if (catSelected.length===0 || !catAgent || !catNombre) return;
+    setCatLoading(true);
+    try {
+      const res = await apiFetch('/api/assigner-nombre', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({
+          categories: catSelected, nombre: parseInt(catNombre)||0,
+          assigne_a: catAgent, annee: filters.annee||'', mois: filters.mois||'', jour: filters.jour||''
+        })
+      });
+      const d = await res.json();
+      showToast('success', `${d.assigned} réclamation(s) assignée(s) avec succès.`);
+      setCatSelected([]); setCatNombre('');
+      load();
+    } catch(e) { /* toast géré */ }
+    finally { setCatLoading(false); }
+  };
+
+  const handleDispatchMot = async () => {
+    if (motSelected.length===0 || !motAgent || !motNombre) return;
+    setMotLoading(true);
+    try {
+      const res = await apiFetch('/api/assigner-nombre', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({
+          motifs: motSelected, nombre: parseInt(motNombre)||0,
+          assigne_a: motAgent, annee: filters.annee||'', mois: filters.mois||'', jour: filters.jour||''
+        })
+      });
+      const d = await res.json();
+      showToast('success', `${d.assigned} réclamation(s) assignée(s) avec succès.`);
+      setMotSelected([]); setMotNombre('');
+      load();
+    } catch(e) { /* toast géré */ }
+    finally { setMotLoading(false); }
+  };
+
+  return (
+    <Fragment>
+      <div className="page-head">
+        <div>
+          <h1>Vue d'ensemble</h1>
+          <div className="desc">Suivi des réclamations · {filters.mois||'tous mois'}/{filters.annee||'toutes années'}</div>
+        </div>
+        <div className="page-actions">
+          <Button variant="secondary" icon="refresh" onClick={load}>Rafraîchir</Button>
+          <a className="btn btn-secondary" href={'/api/export/csv?'+buildQS(filters)}><Icon name="download" size={14}/>Exporter CSV</a>
+        </div>
+      </div>
+
+      <div className="kpi-row">
+        <Kpi label="Total réclamations" value={total} hint={`sur la période`} />
+        <Kpi label="Non assignées" value={na} hint={total?`${Math.round(na/total*100)}% du total`:'—'} />
+        <Kpi label="Assignées" value={ass} hint="en cours" />
+        <Kpi label="Traitées" value={tr} hint={total?`${Math.round(tr/total*100)}% taux`:'—'} accent />
+      </div>
+
+      <Filters filters={filters} setFilters={setFilters} options={PRELOADED_FILTERS}/>
+
+      {/* ---- Dispatch unique : Catégorie à gauche, Motif à droite ---- */}
+      <Card title="Dispatch" sub={`${na} non assignée(s) sur la période`}>
+        <div style={{display:'flex', gap:20, flexWrap:'wrap'}}>
+          <MultiSelect label="Catégorie" options={catOptions} selected={catSelected} onChange={v=>{setCatSelected(v);setCatNombre('');}} placeholder="— Catégories —" />
+          <MultiSelect label="Motif non-paiement" options={motOptions} selected={motSelected} onChange={v=>{setMotSelected(v);setMotNombre('');}} placeholder="— Motifs —" />
+        </div>
+
+        {catVolume != null && (
+          <div style={{borderTop:'1px solid #eee', paddingTop:14, marginTop:14, display:'flex', alignItems:'flex-end', gap:12, flexWrap:'wrap'}}>
+            <div style={{fontSize:13, fontWeight:600, color:'#1a1a1a', flex:'0 0 auto'}}>
+              📋 Catégorie : <span style={{color:'#FF7900', fontSize:16}}>{catVolume}</span> réclamation(s)
+            </div>
+            <Field label="Nombre">
+              <input className="input" type="number" min="1" max={catVolume} style={{width:90}}
+                value={catNombre} placeholder={`max ${catVolume}`}
+                onChange={e => setCatNombre(e.target.value)}/>
+            </Field>
+            <Field label="Attribuer à">
+              <select className="select" style={{minWidth:180}} value={catAgent} onChange={e => setCatAgent(e.target.value)}>
+                {Object.entries(UTILISATEURS).map(([k,v]) => <option key={k} value={k}>{v.nom_complet}</option>)}
+              </select>
+            </Field>
+            <Button variant="primary" icon="arrow" onClick={handleDispatchCat}
+              disabled={catLoading || !catNombre || parseInt(catNombre)<=0 || catSelected.length===0}>
+              {catLoading ? 'En cours…' : 'Dispatcher'}
+            </Button>
+          </div>
+        )}
+
+        {motVolume != null && (
+          <div style={{borderTop:'1px solid #eee', paddingTop:14, marginTop:14, display:'flex', alignItems:'flex-end', gap:12, flexWrap:'wrap'}}>
+            <div style={{fontSize:13, fontWeight:600, color:'#1a1a1a', flex:'0 0 auto'}}>
+              📋 Motif : <span style={{color:'#FF7900', fontSize:16}}>{motVolume}</span> réclamation(s)
+            </div>
+            <Field label="Nombre">
+              <input className="input" type="number" min="1" max={motVolume} style={{width:90}}
+                value={motNombre} placeholder={`max ${motVolume}`}
+                onChange={e => setMotNombre(e.target.value)}/>
+            </Field>
+            <Field label="Attribuer à">
+              <select className="select" style={{minWidth:180}} value={motAgent} onChange={e => setMotAgent(e.target.value)}>
+                {Object.entries(UTILISATEURS).map(([k,v]) => <option key={k} value={k}>{v.nom_complet}</option>)}
+              </select>
+            </Field>
+            <Button variant="primary" icon="arrow" onClick={handleDispatchMot}
+              disabled={motLoading || !motNombre || parseInt(motNombre)<=0 || motSelected.length===0}>
+              {motLoading ? 'En cours…' : 'Dispatcher'}
+            </Button>
+          </div>
+        )}
+
+        {na === 0 && <span style={{color:'#999', fontSize:13}}>Aucune réclamation non assignée sur cette période.</span>}
+      </Card>
+
+      <Card title="Réclamations" sub={`${data.length} résultat${data.length>1?'s':''}`} flush>
+        {loading ? <div className="loading">Chargement…</div> : (
+          <div className="table-wrap">
+            <table className="tbl">
+              <thead><tr>
+                <th>ND</th><th>Client</th><th>Date</th><th>Campagne</th><th>Catégorie</th><th>Motif</th><th>Statut</th><th>Assigné à</th><th></th>
+              </tr></thead>
+              <tbody>
+                {data.length > 200 && (
+                  <tr><td colSpan={9} style={{
+                    background:'#fff3cd', color:'#856404', textAlign:'center',
+                    padding:'8px 12px', fontSize:12, fontWeight:500,
+                    borderBottom:'1px solid #ffc107'
+                  }}>
+                    ⚠️ Affichage limité à 200 résultats — utilisez l'export CSV pour voir toutes les données.
+                  </td></tr>
+                )}
+                {data.slice(0,200).map(r => {
+                  const u = r.assigne_a ? UTILISATEURS[r.assigne_a] : null;
+                  return (
+                    <tr key={r.id_hash}>
+                      <td><span className="cell-mono">{r.nd_clean||'N/A'}</span></td>
+                      <td className="cell-strong">{r.identite_client||'—'}</td>
+                      <td className="cell-muted mono">{(r.startdate||'').slice(0,10)}</td>
+                      <td>{r.campagne||'—'}</td>
+                      <td>{r.categorie_de_non_paiement||'—'}</td>
+                      <td className="cell-clip" title={r.motif_non_paiement||''}>{r.motif_non_paiement||'—'}</td>
+                      <td><StatutBadge statut={r.statut_traitement}/></td>
+                      <td>{u ? <><Avatar initials={initials(u.nom_complet)}/>{u.nom_complet}</> : <span className="cell-muted">—</span>}</td>
+                      <td className="cell-actions">
+                        {r.statut_traitement==='ASSIGNE' && <Button variant="ghost" size="sm" onClick={()=>handleDesassign(r.id_hash)}>Retirer</Button>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+    </Fragment>
+  );
+}
+
+// =================== Page : Admin Corbeille ===================
+function DateRangeFilter({ label, du, au, onDu, onAu, onClear }) {
+  return (
+    <div style={{display:'flex', alignItems:'flex-end', gap:10, flexWrap:'wrap', padding:'12px 14px', background:'var(--bg-sunken,#f7f7f7)', borderRadius:8, border:'1px solid #e8e8e8'}}>
+      <div style={{fontSize:11, fontWeight:700, textTransform:'uppercase', letterSpacing:'.7px', color:'var(--muted,#999)', alignSelf:'center', minWidth:100}}>{label}</div>
+      <div style={{display:'flex', alignItems:'center', gap:8}}>
+        <div>
+          <div style={{fontSize:10, color:'var(--muted,#999)', marginBottom:3, fontWeight:600}}>DU</div>
+          <input type="date" className="input" style={{fontSize:12, padding:'5px 8px'}} value={du} onChange={e=>onDu(e.target.value)}/>
+        </div>
+        <div style={{color:'#ccc', alignSelf:'flex-end', paddingBottom:6}}>→</div>
+        <div>
+          <div style={{fontSize:10, color:'var(--muted,#999)', marginBottom:3, fontWeight:600}}>AU</div>
+          <input type="date" className="input" style={{fontSize:12, padding:'5px 8px'}} value={au} onChange={e=>onAu(e.target.value)}/>
+        </div>
+        {(du||au) && <button className="clear" style={{alignSelf:'flex-end', marginBottom:2}} onClick={onClear}>✕</button>}
+      </div>
+    </div>
+  );
+}
+
+function AdminCorbeille() {
+  const [data, setData] = useState([]);
+  const [stats, setStats] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [redistForm, setRedistForm] = useState({ agent_source:'', agent_cible:Object.keys(UTILISATEURS)[0]||'', nombre:10 });
+
+  // Filtres date assignation (tableau volume par agent)
+  const [assignDu, setAssignDu] = useState('');
+  const [assignAu, setAssignAu] = useState('');
+  // Filtres date traitement (tableau réclamations traitées)
+  const [traitDu, setTraitDu] = useState('');
+  const [traitAu, setTraitAu] = useState('');
+
+  const buildCorbeilleQS = () => {
+    const p = new URLSearchParams();
+    p.append('statut', 'TRAITE');
+    if (traitDu) p.append('date_trait_du', traitDu);
+    if (traitAu) p.append('date_trait_au', traitAu);
+    return p.toString();
+  };
+  // #18 : export volume par agent séparé avec ses propres filtres
+  const buildAgentExportQS = () => {
+    const p = new URLSearchParams();
+    if (assignDu) p.append('date_assign_du', assignDu);
+    if (assignAu) p.append('date_assign_au', assignAu);
+    return p.toString();
+  };
+  const buildStatsQS = () => {
+    const p = new URLSearchParams();
+    if (assignDu) p.append('date_assign_du', assignDu);
+    if (assignAu) p.append('date_assign_au', assignAu);
+    return p.toString();
+  };
+
+  const { apiFetch, showToast } = React.useContext(AppContext);
+  const abortRef = React.useRef(null);
+
+  // #16 : AbortController pour annuler les requêtes stale
+  const load = async () => {
+    if (abortRef.current) abortRef.current.abort();
+    abortRef.current = new AbortController();
+    const signal = abortRef.current.signal;
+    setLoading(true);
+    try {
+      const [r1, r2] = await Promise.all([
+        apiFetch('/api/reclamations?' + buildCorbeilleQS(), { signal }),
+        apiFetch('/api/stats?' + buildStatsQS(), { signal })
+      ]);
+      setData(await r1.json());
+      setStats(await r2.json());
+    } catch(e) {
+      if (e.name !== 'AbortError' && e.message !== 'SESSION_EXPIRED') {
+        // toast déjà affiché par apiFetch
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+  useEffect(()=>{ load(); }, [assignDu, assignAu, traitDu, traitAu]);
+
+  // #15 : validation agent_source avant redistribution
+  const handleRedist = async () => {
+    if (!redistForm.agent_source) {
+      showToast('warn', 'Veuillez sélectionner un agent source avant de redistribuer.');
+      return;
+    }
+    try {
+      await apiFetch('/api/redistribuer', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(redistForm) });
+      showToast('success', 'Redistribution effectuée avec succès.');
+      load();
+    } catch(e) { /* toast géré par apiFetch */ }
+  };
+
+  const agents = stats.volume_par_agent || {};
+
+  return (
+    <Fragment>
+      <div className="page-head">
+        <div>
+          <h1>Corbeille</h1>
+          <div className="desc">Volume par agent · Réclamations traitées</div>
+        </div>
+        <div className="page-actions">
+          <Button variant="secondary" icon="refresh" onClick={load}>Rafraîchir</Button>
+          <a className="btn btn-secondary" href={'/api/export/csv?' + buildAgentExportQS()} title="Export volume par agent (filtré par date assignation)"><Icon name="download" size={14}/>Export agents</a>
+          <a className="btn btn-secondary" href={'/api/export/csv?' + buildCorbeilleQS()} title="Export réclamations traitées (filtré par date traitement)"><Icon name="download" size={14}/>Export traitées</a>
+        </div>
+      </div>
+
+      <div style={{display:'flex', flexDirection:'column', gap:10, marginBottom:16}}>
+        <DateRangeFilter
+          label="📅 Assignation"
+          du={assignDu} au={assignAu}
+          onDu={setAssignDu} onAu={setAssignAu}
+          onClear={()=>{setAssignDu('');setAssignAu('');}}
+        />
+        <DateRangeFilter
+          label="✅ Traitement"
+          du={traitDu} au={traitAu}
+          onDu={setTraitDu} onAu={setTraitAu}
+          onClear={()=>{setTraitDu('');setTraitAu('');}}
+        />
+      </div>
+
+      <Card title="Volume par agent" sub="Performance individuelle sur la période" flush>
+        <div className="table-wrap" style={{maxHeight:'none'}}>
+          <table className="tbl">
+            <thead><tr>
+              <th>Agent</th>
+              <th style={{textAlign:'right'}}>Total</th>
+              <th style={{textAlign:'right'}}>Traitées</th>
+              <th style={{textAlign:'right'}}>Restantes</th>
+              <th style={{width:220}}>Progression</th>
+            </tr></thead>
+            <tbody>
+              {Object.entries(agents).map(([k,v])=>{
+                const u = UTILISATEURS[k];
+                const taux = v.total>0 ? (v.traite/v.total)*100 : 0;
+                return (
+                  <tr key={k}>
+                    <td className="cell-strong">{u && <Avatar initials={initials(u.nom_complet)}/>}{u?u.nom_complet:k}</td>
+                    <td className="mono" style={{textAlign:'right'}}>{v.total}</td>
+                    <td className="mono" style={{textAlign:'right'}}><Badge tone="success">{v.traite}</Badge></td>
+                    <td className="mono" style={{textAlign:'right'}}><Badge tone="accent">{v.restant}</Badge></td>
+                    <td><Progress value={taux} green={taux>=70}/></td>
+                  </tr>
+                );
+              })}
+              {Object.keys(agents).length===0 && <tr><td colSpan="5" className="empty">Aucun agent actif</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      <div className="action-panel">
+        <div className="lead">
+          <h4>Redistribuer des réclamations</h4>
+          <p>Transférer un volume d'un agent vers un autre</p>
+        </div>
+        <div className="controls">
+          <Field label="De">
+            <select className="select" style={{minWidth:200}} value={redistForm.agent_source} onChange={e=>setRedistForm({...redistForm, agent_source:e.target.value})}>
+              <option value="">— Choisir —</option>
+              {Object.keys(agents).map(a=>{const u=UTILISATEURS[a];return <option key={a} value={a}>{u?u.nom_complet:a}</option>;})}
+            </select>
+          </Field>
+          <Field label="Vers">
+            <select className="select" style={{minWidth:200}} value={redistForm.agent_cible} onChange={e=>setRedistForm({...redistForm, agent_cible:e.target.value})}>
+              {Object.entries(UTILISATEURS).map(([k,v])=><option key={k} value={k}>{v.nom_complet}</option>)}
+            </select>
+          </Field>
+          <Field label="Nombre">
+            <input type="number" className="input" min="1" style={{width:80}} value={redistForm.nombre} onChange={e=>setRedistForm({...redistForm, nombre:parseInt(e.target.value)||0})}/>
+          </Field>
+          <Button variant="primary" icon="arrow" onClick={handleRedist}>Redistribuer</Button>
+        </div>
+      </div>
+
+      <Card title={`Réclamations traitées (${data.length})`} flush>
+        {loading ? <div className="loading">Chargement…</div> : (
+          <div className="table-wrap">
+            <table className="tbl">
+              <thead><tr>
+                <th>ND</th><th>Client</th><th>Motif</th><th>Appel</th><th>Niveau</th><th>Sous-motif</th><th>ID Dossier</th><th>Traité par</th><th>Date</th>
+              </tr></thead>
+              <tbody>
+                {data.slice(0,200).map(r=>{
+                  const u = r.assigne_a ? UTILISATEURS[r.assigne_a] : null;
+                  return (
+                    <tr key={r.id_hash}>
+                      <td className="cell-mono">{r.nd_clean||'N/A'}</td>
+                      <td className="cell-strong">{r.identite_client||'—'}</td>
+                      <td className="cell-clip" title={r.motif_non_paiement||''}>{r.motif_non_paiement||r.categorie_de_non_paiement||'—'}</td>
+                      <td>{r.statut_appel==='DECROCHE'?<Badge tone="success">Décroché</Badge>:r.statut_appel?<Badge tone="danger">Pas décroché</Badge>:'—'}</td>
+                      <td>{r.niveau==='1'?<Badge tone="info">N1</Badge>:r.niveau==='2'?<Badge tone="warn">N2</Badge>:'—'}</td>
+                      <td>{r.sous_motif||'—'}</td>
+                      <td className="mono">{r.id_dossier||'—'}</td>
+                      <td>{u?<><Avatar initials={initials(u.nom_complet)}/>{u.nom_complet}</>:'—'}</td>
+                      <td className="cell-muted mono">{r.date_traitement||'—'}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+    </Fragment>
+  );
+}
+
+// =================== Page : Dashboard ===================
+function Dashboard() {
+  const [stats, setStats] = useState(null);
+  const [filters, setFilters] = useState({ annee: DEFAULT_ANNEE, mois: DEFAULT_MOIS });
+  const isAdmin = CURRENT_USER.role === 'admin';
+
+  const load = useCallback(async () => {
+    const res = await fetch('/api/stats?'+buildQS(filters));
+    setStats(await res.json());
+  }, [filters]);
+  useEffect(()=>{ load(); }, [load]);
+
+  if (!stats) return <div className="loading">Chargement…</div>;
+  const motifMax = Math.max(...(stats.motif_labels||[]).map((_,i)=>(stats.motif_traite_vals[i]||0)+(stats.motif_non_traite_vals[i]||0)),1);
+
+  return (
+    <Fragment>
+      <div className="page-head">
+        <div>
+          <h1>Dashboard</h1>
+          <div className="desc">Indicateurs · {filters.mois||'—'}/{filters.annee||'—'}</div>
+        </div>
+        <div className="page-actions">
+          <a className="btn btn-secondary" href={'/api/export/csv?'+buildQS(filters)}><Icon name="download" size={14}/>Exporter</a>
+        </div>
+      </div>
+
+      <Filters filters={filters} setFilters={setFilters} options={PRELOADED_FILTERS} withSearch={false} isUser={!isAdmin}/>
+
+      <div className="kpi-row">
+        <Kpi label="Total" value={stats.total}/>
+        <Kpi label="Traitées" value={stats.traitees} hint={`sur ${stats.total}`} accent/>
+        <Kpi label="Taux de traitement" value={stats.taux} unit="%"/>
+        {isAdmin
+          ? <Kpi label="Non décrochés" value={stats.non_decroche} hint={`${stats.pct_non_decroche}% des traitements`}/>
+          : <Kpi label="Délai moyen" value={stats.delai_moyen} unit="h"/>}
+      </div>
+
+      <div className="grid-2">
+        <Card title={isAdmin?'Taux global de traitement':'Ma progression'} sub="Avancement de la période">
+          <GaugeChart value={stats.taux} color={isAdmin?'var(--accent)':'var(--success)'}/>
+        </Card>
+        {isAdmin
+          ? <Card title="Volume par jour" sub="Évolution quotidienne"><LineChart data={stats.par_jour||{}}/></Card>
+          : <Card title="Répartition Niveau 1 / Niveau 2" sub="Sur tes traitements"><DonutN1N2 n1={stats.n1} n2={stats.n2}/></Card>}
+      </div>
+
+      <Card title="Volume par motif" sub="Comparaison Traité vs Non traité">
+        <HBar labels={stats.motif_labels||[]} traite={stats.motif_traite_vals||[]} non={stats.motif_non_traite_vals||[]} max={motifMax}/>
+        <div style={{display:'flex',gap:16,marginTop:16,fontSize:12,color:'var(--ink-3)'}}>
+          <div className="row"><span style={{width:10,height:10,background:'var(--success)',borderRadius:2}}/> Traité</div>
+          <div className="row"><span style={{width:10,height:10,background:'var(--accent)',borderRadius:2}}/> Non traité</div>
+        </div>
+      </Card>
+    </Fragment>
+  );
+}
+
+// =================== Page : User General ===================
+function TraitForm({ rec, form, setForm, onSubmit }) {
+  const sousMotifOptions = SOUS_MOTIFS[rec.motif_non_paiement] || SOUS_MOTIFS[rec.categorie_de_non_paiement] || [];
+  return (
+    <div className="treat-form">
+      <h4>Traitement BO</h4>
+      <div className="form-grid">
+        <Field label="Statut appel *">
+          <select className="select" value={form.statut_appel} onChange={e=>setForm({...form, statut_appel:e.target.value})}>
+            <option value="">— Choisir —</option>
+            <option value="DECROCHE">Décroché</option>
+            <option value="PAS DECROCHE">Pas décroché</option>
+          </select>
+        </Field>
+        <Field label="Niveau *">
+          <select className="select" value={form.niveau} onChange={e=>setForm({...form, niveau:e.target.value})}>
+            <option value="">— Choisir —</option>
+            <option value="1">Niveau 1</option>
+            <option value="2">Niveau 2</option>
+          </select>
+        </Field>
+        <Field label="Zone">
+          <input className="input" placeholder="Cocody, Yopougon…" value={form.zone_client} onChange={e=>setForm({...form, zone_client:e.target.value})}/>
+        </Field>
+        <Field label="ID Dossier">
+          <input className="input" placeholder="DOS-XXXXX" value={form.id_dossier} onChange={e=>setForm({...form, id_dossier:e.target.value})}/>
+        </Field>
+      </div>
+      {sousMotifOptions.length>0 && (
+        <div style={{marginBottom:12}}>
+          <Field label="Sous-motif">
+            <select className="select" value={form.sous_motif} onChange={e=>setForm({...form, sous_motif:e.target.value})}>
+              <option value="">— Choisir —</option>
+              {sousMotifOptions.map(s=><option key={s} value={s}>{s}</option>)}
+            </select>
+          </Field>
+        </div>
+      )}
+      <div style={{marginBottom:12}}>
+        <Field label="Motif réel constaté">
+          <input className="input" placeholder="Description du motif réel" value={form.motif_reel} onChange={e=>setForm({...form, motif_reel:e.target.value})}/>
+        </Field>
+      </div>
+      <Field label="Commentaire">
+        <textarea className="textarea" placeholder="Détails du contact, engagements pris…" value={form.commentaire_bo} onChange={e=>setForm({...form, commentaire_bo:e.target.value})}/>
+      </Field>
+      {form._error && (
+        <div style={{
+          background:'#fff3cd', border:'1.5px solid #ffc107', borderRadius:8,
+          padding:'8px 14px', fontSize:12, color:'#856404', marginBottom:8, display:'flex', alignItems:'center', gap:6
+        }}>
+          ⚠️ <strong>Statut appel obligatoire</strong> — veuillez sélectionner "Décroché" ou "Pas décroché" avant de valider.
+        </div>
+      )}
+      <div className="actions">
+        <Button variant="primary" icon="check" onClick={()=>{
+          if (!form.statut_appel) { setForm({...form, _error:true}); return; }
+          // #20 : exclure _error du body envoyé au backend
+          const { _error, ...clean } = form;
+          onSubmit({...clean, id_hash:rec.id_hash});
+        }}>Valider le traitement</Button>
+      </div>
+    </div>
+  );
+}
+
+function ReclaCard({ rec, expanded, onToggle, onTraiter, onModifComment }) {
+  const done = rec.statut_traitement === 'TRAITE';
+  const [comment, setComment] = useState(rec.commentaire_bo||'');
+  // #21 : état formulaire remonté ici pour survivre aux fermetures/réouvertures
+  const [traitForm, setTraitForm] = useState({ statut_appel:'', motif_reel:'', niveau:'', commentaire_bo:'', zone_client:'', sous_motif:'', id_dossier:'', _error:false });
+  return (
+    <div className={`recla ${expanded?'expanded':''} ${done?'done':''}`}>
+      <div className="recla-head" onClick={onToggle}>
+        <div className="left">
+          <Icon name="chevron"/>
+          <span className="nd">{rec.nd_clean||'N/A'}</span>
+          <span className="name">{rec.identite_client||'—'}</span>
+          <span className="meta">· {rec.motif_non_paiement||rec.categorie_de_non_paiement||'—'}</span>
+        </div>
+        <div className="right">
+          <span className="meta">{(rec.startdate||'').slice(0,10)}</span>
+          {done ? <Badge tone="success" dot>Traitée</Badge> : <Badge tone="info" dot>À traiter</Badge>}
+        </div>
+      </div>
+      {expanded && (
+        <div className="recla-body">
+          <div className="detail-grid">
+            <div className="it"><div className="lb">Date</div><div className="vl">{(rec.startdate||'').slice(0,10)}</div></div>
+            <div className="it"><div className="lb">Contact</div><div className="vl mono">{rec.contact||'—'}</div></div>
+            <div className="it"><div className="lb">Disponibilité</div><div className="vl">{rec.disponibilite_client||'—'}</div></div>
+            <div className="it"><div className="lb">Catégorie</div><div className="vl">{rec.categorie_de_non_paiement||'—'}</div></div>
+            <div className="it"><div className="lb">Motif</div><div className="vl">{rec.motif_non_paiement||'—'}</div></div>
+            <div className="it"><div className="lb">Campagne</div><div className="vl">{rec.campagne||'—'}</div></div>
+          </div>
+          {!done && <TraitForm rec={rec} form={traitForm} setForm={setTraitForm} onSubmit={onTraiter}/>}
+          {done && (
+            <Fragment>
+              <div className="treat-summary"><Icon name="check" size={14}/> Traitée le {rec.date_traitement||'—'}</div>
+              <div className="detail-grid">
+                <div className="it"><div className="lb">Statut appel</div><div className="vl">{rec.statut_appel||'—'}</div></div>
+                <div className="it"><div className="lb">Motif réel</div><div className="vl">{rec.motif_reel||'—'}</div></div>
+                <div className="it"><div className="lb">Niveau</div><div className="vl">{rec.niveau==='1'?'N1':rec.niveau==='2'?'N2':'—'}</div></div>
+                <div className="it"><div className="lb">Zone</div><div className="vl">{rec.zone_client||'—'}</div></div>
+                <div className="it"><div className="lb">Sous-motif</div><div className="vl">{rec.sous_motif||'—'}</div></div>
+                <div className="it"><div className="lb">ID Dossier</div><div className="vl mono">{rec.id_dossier||'—'}</div></div>
+              </div>
+              <div className="treat-form">
+                <Field label="Commentaire (modifiable)">
+                  <textarea className="textarea" value={comment} onChange={e=>setComment(e.target.value)}/>
+                </Field>
+                <div className="actions">
+                  <Button variant="secondary" size="sm" onClick={()=>onModifComment(rec.id_hash, comment)}>Modifier le commentaire</Button>
+                </div>
+              </div>
+            </Fragment>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function UserGeneral() {
+  const [filters, setFilters] = useState({ annee: DEFAULT_ANNEE, mois: DEFAULT_MOIS });
+  const [data, setData] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [expandedId, setExpandedId] = useState(null);
+  const [tab, setTab] = useState('atraiter');
+
+  // Filtre date traitement (onglet Traitées)
+  const [traitDu, setTraitDu] = useState('');
+  const [traitAu, setTraitAu] = useState('');
+  // Filtre date assignation (onglet À traiter)
+  const [assignDu, setAssignDu] = useState('');
+  const [assignAu, setAssignAu] = useState('');
+
+  const { apiFetch, showToast } = React.useContext(AppContext);
+
+  // #10 : export cohérent avec l'onglet actif
+  const buildExportQS = () => {
+    const p = new URLSearchParams(buildQS(filters));
+    if (tab === 'atraiter') {
+      if (assignDu) p.append('date_assign_du', assignDu);
+      if (assignAu) p.append('date_assign_au', assignAu);
+    } else {
+      if (traitDu) p.append('date_trait_du', traitDu);
+      if (traitAu) p.append('date_trait_au', traitAu);
+      p.append('statut', 'TRAITE');
+    }
+    return p.toString();
+  };
+
+  // Requête sans filtre date onglet pour les KPIs vrais (#11)
+  const buildKpiQS = () => buildQS(filters);
+
+  // #8 : useCallback avec toutes les dépendances
+  const load = useCallback(async () => {
+    setLoading(true);
+    const baseQS = new URLSearchParams(buildQS(filters));
+    if (assignDu) baseQS.append('date_assign_du', assignDu);
+    if (assignAu) baseQS.append('date_assign_au', assignAu);
+    if (traitDu) baseQS.append('date_trait_du', traitDu);
+    if (traitAu) baseQS.append('date_trait_au', traitAu);
+    try {
+      const res = await apiFetch('/api/reclamations?'+baseQS.toString());
+      let d = await res.json();
+      setData(filterSearch(d, filters.search));
+    } catch(e) { /* toast géré */ }
+    finally { setLoading(false); }
+  }, [filters, traitDu, traitAu, assignDu, assignAu]);
+  useEffect(()=>{ load(); }, [load]);
+
+  // #11 : KPIs calculés sur data complet — pas affectés par les filtres date onglet
+  const ass = data.filter(r=>r.statut_traitement==='ASSIGNE');
+  const tr = data.filter(r=>r.statut_traitement==='TRAITE');
+
+  // Visible selon onglet
+  const visible = tab==='atraiter' ? ass : tr;
+
+  const handleTraiter = async (form) => {
+    try {
+      await apiFetch('/api/traiter', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(form) });
+      showToast('success', 'Réclamation traitée avec succès.');
+      setExpandedId(null);
+      load();
+    } catch(e) { /* toast géré */ }
+  };
+  const handleModifComment = async (id_hash, commentaire_bo) => {
+    try {
+      await apiFetch('/api/modifier-commentaire', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({id_hash, commentaire_bo}) });
+      showToast('success', 'Commentaire modifié.');
+      load();
+    } catch(e) { /* toast géré */ }
+  };
+
+  return (
+    <Fragment>
+      <div className="page-head">
+        <div>
+          <h1>Mes réclamations</h1>
+          <div className="desc">{ass.length} à traiter · {tr.length} traitées</div>
+        </div>
+        <div className="page-actions">
+          <a className="btn btn-secondary" href={'/api/export/csv?'+buildExportQS()}><Icon name="download" size={14}/>Exporter CSV</a>
+        </div>
+      </div>
+
+      <div className="kpi-row">
+        <Kpi label="À traiter" value={ass.length} hint="dans ta file" accent/>
+        <Kpi label="Traitées" value={tr.length} hint="cette période"/>
+        <Kpi label="Taux personnel" value={data.length?Math.round(tr.length/data.length*100):0} unit="%"/>
+      </div>
+
+      <Filters filters={filters} setFilters={setFilters} options={PRELOADED_FILTERS} isUser={true}/>
+
+      <div className="tabs">
+        <div className={`tab ${tab==='atraiter'?'active':''}`} onClick={()=>{ setTab('atraiter'); setTraitDu(''); setTraitAu(''); }}>À traiter <span className="muted" style={{marginLeft:6}}>{ass.length}</span></div>
+        <div className={`tab ${tab==='traitees'?'active':''}`} onClick={()=>{ setTab('traitees'); setAssignDu(''); setAssignAu(''); }}>Traitées <span className="muted" style={{marginLeft:6}}>{tr.length}</span></div>
+      </div>
+
+      {tab==='atraiter' && (
+        <div style={{marginBottom:12}}>
+          <DateRangeFilter
+            label="📅 Date assignation"
+            du={assignDu} au={assignAu}
+            onDu={setAssignDu} onAu={setAssignAu}
+            onClear={()=>{setAssignDu('');setAssignAu('');}}
+          />
+        </div>
+      )}
+      {tab==='traitees' && (
+        <div style={{marginBottom:12}}>
+          <DateRangeFilter
+            label="✅ Date traitement"
+            du={traitDu} au={traitAu}
+            onDu={setTraitDu} onAu={setTraitAu}
+            onClear={()=>{setTraitDu('');setTraitAu('');}}
+          />
+        </div>
+      )}
+
+      {loading ? <div className="loading">Chargement…</div> :
+       visible.length===0 ?
+         <div className="card"><div className="empty"><h3>Aucune réclamation {tab==='atraiter'?'à traiter':'traitée'}</h3><p>Vos prochaines assignations apparaîtront ici.</p></div></div>
+         :
+         visible.map(r => <ReclaCard key={r.id_hash} rec={r} expanded={expandedId===r.id_hash} onToggle={()=>setExpandedId(expandedId===r.id_hash?null:r.id_hash)} onTraiter={handleTraiter} onModifComment={handleModifComment}/>)
+      }
+    </Fragment>
+  );
+}
+
+// =================== Main App ===================
+function App() {
+  const [page, setPage] = useState('general');
+  const [counts, setCounts] = useState({});
+  const isAdmin = CURRENT_USER.role === 'admin';
+  const titles = { general: isAdmin?"Vue d'ensemble":'Mes réclamations', corbeille:'Corbeille', dashboard:'Dashboard' };
+
+  // Counts pour la sidebar
+  useEffect(() => {
+    fetch('/api/stats').then(r=>r.json()).then(s => {
+      if (isAdmin) setCounts({ general:s.non_assignees, corbeille:s.traitees });
+      else setCounts({ general:s.assignees });
+    }).catch(()=>{});
+  }, [page]);
+
+  let content;
+  if (isAdmin) {
+    if (page==='general') content = <AdminGeneral/>;
+    else if (page==='corbeille') content = <AdminCorbeille/>;
+    else content = <Dashboard/>;
+  } else {
+    if (page==='general') content = <UserGeneral/>;
+    else content = <Dashboard/>;
+  }
+
+  return (
+    <div className="layout">
+      <Sidebar user={CURRENT_USER} page={page} setPage={setPage} counts={counts}/>
+      <div className="main">
+        <Topbar title={titles[page]} breadcrumb={isAdmin?'Admin':'Agent'}/>
+        <div className="content">{content}</div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(
+  <AppProvider><App/></AppProvider>
+);
+{% endraw %}
+</script>
+</body>
+</html>

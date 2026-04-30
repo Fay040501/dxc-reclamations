@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+{% block title %}Mon Dashboard{% endblock %}
+{% block page_title %}Dashboard{% endblock %}
+
+{% block sidebar_nav %}
+<a href="/user/general">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+    Vue d'ensemble
+</a>
+<a href="/user/dashboard" class="active">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+    Dashboard
+</a>
+{% endblock %}
+
+{% block content %}
+<div class="stats-row">
+    <div class="stat-card green">
+        <div class="stat-number">{{ stats.traitees }}</div>
+        <div class="stat-label">Traitées</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-number">{{ stats.restants }}</div>
+        <div class="stat-label">Restantes</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-number">{{ stats.taux }}%</div>
+        <div class="stat-label">Taux de traitement</div>
+    </div>
+    <div class="stat-card blue">
+        <div class="stat-number">{{ stats.delai_moyen }}h</div>
+        <div class="stat-label">Délai moyen</div>
+    </div>
+</div>
+
+<div class="grid-2">
+    <!-- Jauge taux -->
+    <div class="chart-box" style="text-align:center;">
+        <h3>Ma progression</h3>
+        <canvas id="gaugeChart" width="250" height="250" style="margin:0 auto;max-width:250px;"></canvas>
+    </div>
+
+    <!-- Camembert N1/N2 -->
+    <div class="chart-box" style="text-align:center;">
+        <h3>Répartition N1 / N2</h3>
+        <canvas id="pieChart" width="250" height="250" style="margin:0 auto;max-width:250px;"></canvas>
+    </div>
+</div>
+
+<!-- Histogramme motifs -->
+<div class="chart-box">
+    <h3>Volume par motif</h3>
+    <canvas id="barChart" height="250"></canvas>
+</div>
+
+<div class="export-bar">
+    <a href="/export/csv" class="btn btn-ghost">Exporter CSV / Excel</a>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const taux = {{ stats.taux }};
+const n1 = {{ stats.n1 }};
+const n2 = {{ stats.n2 }};
+const parMotif = {{ par_motif|safe }};
+
+// Gauge
+new Chart(document.getElementById('gaugeChart'), {
+    type: 'doughnut',
+    data: {
+        datasets: [{
+            data: [taux, 100 - taux],
+            backgroundColor: ['#50BE87', '#E8E8E8'],
+            borderWidth: 0
+        }]
+    },
+    options: {
+        cutout: '75%',
+        rotation: -90,
+        circumference: 180,
+        plugins: { legend: { display: false }, tooltip: { enabled: false } }
+    },
+    plugins: [{
+        id: 'gaugeText',
+        afterDraw(chart) {
+            const { ctx, chartArea } = chart;
+            ctx.save();
+            ctx.font = 'bold 32px DM Sans';
+            ctx.fillStyle = '#000';
+            ctx.textAlign = 'center';
+            ctx.fillText(taux + '%', chartArea.width / 2 + chartArea.left, chartArea.height - 20);
+            ctx.restore();
+        }
+    }]
+});
+
+// Pie N1/N2
+new Chart(document.getElementById('pieChart'), {
+    type: 'doughnut',
+    data: {
+        labels: ['Niveau 1 (traité)', 'Niveau 2 (escaladé)'],
+        datasets: [{
+            data: [n1, n2],
+            backgroundColor: ['#50BE87', '#FF7900'],
+            borderWidth: 2,
+            borderColor: '#fff'
+        }]
+    },
+    options: {
+        plugins: {
+            legend: { position: 'bottom', labels: { font: { size: 12, family: 'DM Sans' }, padding: 16 } }
+        }
+    }
+});
+
+// Bar motifs
+new Chart(document.getElementById('barChart'), {
+    type: 'bar',
+    data: {
+        labels: Object.keys(parMotif),
+        datasets: [{
+            data: Object.values(parMotif),
+            backgroundColor: '#4BB4E6',
+            borderRadius: 6
+        }]
+    },
+    options: {
+        indexAxis: 'y',
+        plugins: { legend: { display: false } },
+        scales: {
+            x: { beginAtZero: true, grid: { color: '#f0f0f0' } },
+            y: { grid: { display: false }, ticks: { font: { size: 11 } } }
+        }
+    }
+});
+</script>
+{% endblock %}

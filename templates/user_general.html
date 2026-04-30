@@ -1,0 +1,200 @@
+{% extends "base.html" %}
+{% block title %}Mes Réclamations{% endblock %}
+{% block page_title %}Vue Générale{% endblock %}
+
+{% block sidebar_nav %}
+<a href="/user/general" class="active">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+    Vue d'ensemble
+</a>
+<a href="/user/dashboard">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+    Dashboard
+</a>
+{% endblock %}
+
+{% block content %}
+<div class="stats-row">
+    <div class="stat-card blue">
+        <div class="stat-number">{{ stats.assignees }}</div>
+        <div class="stat-label">Assignées</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-number">{{ stats.a_traiter }}</div>
+        <div class="stat-label">À traiter</div>
+    </div>
+    <div class="stat-card green">
+        <div class="stat-number">{{ stats.traitees }}</div>
+        <div class="stat-label">Traitées</div>
+    </div>
+</div>
+
+<!-- Filtres -->
+<div class="card" style="padding:12px 20px;">
+    <div class="filter-row">
+        <label>Rechercher :</label>
+        <input type="text" id="searchInput" placeholder="ND, client, motif..." oninput="filterCards()" style="width:220px;">
+        <label>Statut :</label>
+        <select id="filterStatut" onchange="filterCards()">
+            <option value="">Tous</option>
+            <option value="ASSIGNE">À traiter</option>
+            <option value="TRAITE">Traité</option>
+        </select>
+        <label>Motif :</label>
+        <select id="filterMotif" onchange="filterCards()">
+            <option value="">Tous</option>
+            {% for m in motifs %}
+            <option value="{{ m }}">{{ m }}</option>
+            {% endfor %}
+        </select>
+        <label>Catégorie :</label>
+        <select id="filterCat" onchange="filterCards()">
+            <option value="">Toutes</option>
+            {% for c in categories %}
+            <option value="{{ c }}">{{ c }}</option>
+            {% endfor %}
+        </select>
+    </div>
+</div>
+
+<!-- Liste des réclamations -->
+{% if reclamations %}
+    {% for r in reclamations %}
+    <div class="recla-card {% if r.statut_traitement == 'TRAITE' %}traite{% endif %}"
+         data-statut="{{ r.statut_traitement }}"
+         data-motif="{{ r['MOTIF NON PAIEMENT'] or '' }}"
+         data-cat="{{ r['CATEGORIE DE NON PAIEMENT'] or '' }}"
+         data-search="{{ r.nd_propre }} {{ r['IDENTITE CLIENT'] or '' }} {{ r['MOTIF NON PAIEMENT'] or '' }}">
+
+        <div class="recla-card-header">
+            <div>
+                <span class="recla-nd">{{ r.nd_propre }}</span>
+                <span style="margin-left:8px;font-size:14px;">{{ r['IDENTITE CLIENT'] or '' }}</span>
+            </div>
+            {% if r.statut_traitement == 'TRAITE' %}
+                <span class="badge badge-green">Traité</span>
+            {% else %}
+                <span class="badge badge-blue">À traiter</span>
+            {% endif %}
+        </div>
+
+        <div class="recla-grid">
+            <div><div class="label">Date survey</div><div class="value">{{ r.StartDate[:10] if r.StartDate else '-' }}</div></div>
+            <div><div class="label">Contact</div><div class="value">{{ r.CONTACT or '-' }}</div></div>
+            <div><div class="label">ND Fibre</div><div class="value">{{ r.ND_FIBRE or '-' }}</div></div>
+            <div><div class="label">Disponibilité</div><div class="value">{{ (r['DISPONIBILITE CLIENT'] or '-')[:30] }}</div></div>
+            <div><div class="label">Catégorie</div><div class="value">{{ r['CATEGORIE DE NON PAIEMENT'] or '-' }}</div></div>
+            <div><div class="label">Motif survey</div><div class="value">{{ r['MOTIF NON PAIEMENT'] or '-' }}</div></div>
+        </div>
+
+        {% if r.statut_traitement != 'TRAITE' %}
+        <!-- Formulaire de traitement -->
+        <div class="treat-form">
+            <h4>Traitement BO</h4>
+            <form method="POST" action="/user/traiter">
+                <input type="hidden" name="nd_propre" value="{{ r.nd_propre }}">
+                <div class="treat-row">
+                    <div class="treat-group">
+                        <label>Statut appel *</label>
+                        <select name="statut_appel" required>
+                            <option value="">-- Choisir --</option>
+                            <option value="DECROCHE">Décroché</option>
+                            <option value="PAS DECROCHE">Pas décroché</option>
+                        </select>
+                    </div>
+                    <div class="treat-group">
+                        <label>Niveau *</label>
+                        <select name="niveau" required>
+                            <option value="">-- Choisir --</option>
+                            <option value="1">Niveau 1 (traité)</option>
+                            <option value="2">Niveau 2 (escaladé)</option>
+                        </select>
+                    </div>
+                    <div class="treat-group">
+                        <label>Zone du client</label>
+                        <input type="text" name="zone_client" placeholder="Cocody, Yopougon...">
+                    </div>
+                </div>
+                <div class="treat-row">
+                    <div class="treat-group" style="grid-column:1/-1;">
+                        <label>Motif réel</label>
+                        <input type="text" name="motif_reel" placeholder="Motif constaté après traitement">
+                    </div>
+                </div>
+                <div class="treat-row">
+                    <div class="treat-group" style="grid-column:1/-1;">
+                        <label>Commentaire</label>
+                        <textarea name="commentaire_bo" placeholder="Détails du traitement..."></textarea>
+                    </div>
+                </div>
+                <div class="treat-submit">
+                    <button type="submit" class="btn btn-green">Valider le traitement</button>
+                </div>
+            </form>
+        </div>
+        {% else %}
+        <!-- Résumé traitement + modification commentaire -->
+        <div class="treat-form" style="background:#E8F5E9;">
+            <div class="recla-grid">
+                <div><div class="label">Statut appel</div><div class="value">{{ r.statut_appel or '-' }}</div></div>
+                <div><div class="label">Motif réel</div><div class="value">{{ r.motif_reel or '-' }}</div></div>
+                <div><div class="label">Niveau</div><div class="value">{% if r.niveau == '1' %}N1{% elif r.niveau == '2' %}N2{% else %}-{% endif %}</div></div>
+                <div><div class="label">Zone</div><div class="value">{{ r.zone_client or '-' }}</div></div>
+                <div><div class="label">Traité le</div><div class="value">{{ r.date_traitement[:10] if r.date_traitement else '-' }}</div></div>
+            </div>
+            <!-- Modifier commentaire -->
+            <form method="POST" action="/user/modifier-commentaire" style="margin-top:8px;">
+                <input type="hidden" name="nd_propre" value="{{ r.nd_propre }}">
+                <div class="treat-group">
+                    <label>Commentaire (modifiable)</label>
+                    <textarea name="commentaire_bo" style="width:100%;">{{ r.commentaire_bo or '' }}</textarea>
+                </div>
+                <div class="treat-submit">
+                    <button type="submit" class="btn btn-ghost btn-sm">Modifier commentaire</button>
+                </div>
+            </form>
+        </div>
+        {% endif %}
+    </div>
+    {% endfor %}
+{% else %}
+<div class="card" style="text-align:center;padding:60px;">
+    <h3 style="color:#8F8F8F;">Aucune réclamation assignée</h3>
+    <p style="color:#8F8F8F;margin-top:8px;">L'administrateur ne vous a pas encore assigné de réclamations.</p>
+</div>
+{% endif %}
+
+<div class="export-bar">
+    <a href="#" class="btn btn-ghost" onclick="exportFiltered()">Exporter CSV / Excel (filtré)</a>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function filterCards() {
+    const search = document.getElementById('searchInput').value.toLowerCase();
+    const statut = document.getElementById('filterStatut').value;
+    const motif = document.getElementById('filterMotif').value;
+    const cat = document.getElementById('filterCat').value;
+    document.querySelectorAll('.recla-card').forEach(card => {
+        let show = true;
+        if (search && !card.dataset.search.toLowerCase().includes(search)) show = false;
+        if (statut && card.dataset.statut !== statut) show = false;
+        if (motif && card.dataset.motif !== motif) show = false;
+        if (cat && card.dataset.cat !== cat) show = false;
+        card.style.display = show ? '' : 'none';
+    });
+}
+
+function exportFiltered() {
+    const statut = document.getElementById('filterStatut').value;
+    const motif = document.getElementById('filterMotif').value;
+    const cat = document.getElementById('filterCat').value;
+    let url = '/export/csv?';
+    if (statut) url += 'statut=' + encodeURIComponent(statut) + '&';
+    if (motif) url += 'motif=' + encodeURIComponent(motif) + '&';
+    if (cat) url += 'categorie=' + encodeURIComponent(cat) + '&';
+    window.location.href = url;
+}
+</script>
+{% endblock %}

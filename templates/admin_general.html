@@ -1,0 +1,209 @@
+{% extends "base.html" %}
+{% block title %}Admin - Vue Générale{% endblock %}
+{% block page_title %}Vue Générale{% endblock %}
+
+{% block sidebar_nav %}
+<a href="/admin/general" class="active">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+    Vue d'ensemble
+</a>
+<a href="/admin/corbeille">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3,6 5,6 21,6"/><path d="M19,6v14a2,2,0,0,1-2,2H7a2,2,0,0,1-2-2V6m3,0V4a2,2,0,0,1,2-2h4a2,2,0,0,1,2,2v2"/></svg>
+    Corbeille
+</a>
+<a href="/admin/dashboard">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+    Dashboard
+</a>
+{% endblock %}
+
+{% block content %}
+<div class="stats-row">
+    <div class="stat-card">
+        <div class="stat-number">{{ stats.total }}</div>
+        <div class="stat-label">Total</div>
+    </div>
+    <div class="stat-card gray">
+        <div class="stat-number">{{ stats.non_assignees }}</div>
+        <div class="stat-label">Non assignées</div>
+    </div>
+    <div class="stat-card blue">
+        <div class="stat-number">{{ stats.assignees }}</div>
+        <div class="stat-label">Assignées</div>
+    </div>
+    <div class="stat-card green">
+        <div class="stat-number">{{ stats.traitees }}</div>
+        <div class="stat-label">Traitées</div>
+    </div>
+</div>
+
+<!-- Assignation par nombre -->
+<div class="assign-box">
+    <h3>Assignation rapide</h3>
+    <form method="POST" action="/admin/assigner-nombre">
+        <div style="display:flex;gap:20px;flex-wrap:wrap;margin-bottom:12px;">
+            <div style="flex:1;min-width:200px;">
+                <label style="font-size:12px;font-weight:600;color:#595959;text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px;">Motifs (multi-sélection)</label>
+                <select name="filtre_motifs" id="assignMotifs" multiple onchange="updateVolume()" style="width:100%;height:120px;font-size:12px;">
+                    {% for m in motifs %}
+                    <option value="{{ m }}">{{ m }}</option>
+                    {% endfor %}
+                </select>
+                <div style="font-size:11px;color:#8F8F8F;margin-top:2px;">Ctrl+clic pour sélectionner plusieurs</div>
+            </div>
+            <div style="flex:1;min-width:200px;">
+                <label style="font-size:12px;font-weight:600;color:#595959;text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px;">Catégories (multi-sélection)</label>
+                <select name="filtre_categories" id="assignCats" multiple onchange="updateVolume()" style="width:100%;height:120px;font-size:12px;">
+                    {% for c in categories %}
+                    <option value="{{ c }}">{{ c }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+        <div class="volume-info" id="volumeInfo" style="display:block;">{{ stats.non_assignees }} réclamation(s) disponible(s)</div>
+        <div class="form-inline" style="margin-top:10px;">
+            <label style="font-size:13px;">Nombre :</label>
+            <input type="number" name="nombre" min="1" max="500" value="50" style="width:80px;" required>
+            <label style="font-size:13px;">Attribuer à :</label>
+            <select name="assigne_a" required>
+                {% for login, info in utilisateurs.items() %}
+                <option value="{{ login }}">{{ info.nom_complet }}</option>
+                {% endfor %}
+            </select>
+            <button type="submit" class="btn btn-orange">Assigner</button>
+        </div>
+    </form>
+</div>
+
+<!-- Filtres tableau -->
+<div class="card">
+    <div class="card-title">Réclamations</div>
+    <div class="filter-row">
+        <label>Rechercher :</label>
+        <input type="text" id="searchInput" placeholder="ND, client, motif..." oninput="filterTable()" style="width:220px;">
+        <label>Statut :</label>
+        <select id="filterStatut" onchange="filterTable()">
+            <option value="">Tous</option>
+            <option value="NON ASSIGNE">Non assigné</option>
+            <option value="ASSIGNE">Assigné</option>
+            <option value="TRAITE">Traité</option>
+        </select>
+        <label>Motif :</label>
+        <select id="filterMotif" onchange="filterTable()">
+            <option value="">Tous</option>
+            {% for m in motifs %}
+            <option value="{{ m }}">{{ m }}</option>
+            {% endfor %}
+        </select>
+        <label>Catégorie :</label>
+        <select id="filterCat" onchange="filterTable()">
+            <option value="">Toutes</option>
+            {% for c in categories %}
+            <option value="{{ c }}">{{ c }}</option>
+            {% endfor %}
+        </select>
+    </div>
+
+    <div class="table-wrapper">
+        <table id="reclaTable">
+            <thead>
+                <tr>
+                    <th>ND</th>
+                    <th>Client</th>
+                    <th>Date</th>
+                    <th>Catégorie</th>
+                    <th>Motif</th>
+                    <th>Statut</th>
+                    <th>Assigné à</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in reclamations %}
+                <tr data-statut="{{ r.statut_traitement or 'NON ASSIGNE' }}" data-motif="{{ r['MOTIF NON PAIEMENT'] or '' }}" data-cat="{{ r['CATEGORIE DE NON PAIEMENT'] or '' }}">
+                    <td class="nd-cell">{{ r.nd_propre }}</td>
+                    <td>{{ r['IDENTITE CLIENT'] or '-' }}</td>
+                    <td>{{ r.StartDate[:10] if r.StartDate else '-' }}</td>
+                    <td>{{ r['CATEGORIE DE NON PAIEMENT'] or '-' }}</td>
+                    <td class="motif-cell" title="{{ r['MOTIF NON PAIEMENT'] or '' }}">{{ r['MOTIF NON PAIEMENT'] or '-' }}</td>
+                    <td>
+                        {% if r.statut_traitement == 'NON ASSIGNE' %}<span class="badge badge-gray">Non assigné</span>
+                        {% elif r.statut_traitement == 'ASSIGNE' %}<span class="badge badge-blue">Assigné</span>
+                        {% elif r.statut_traitement == 'TRAITE' %}<span class="badge badge-green">Traité</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ r.assigne_a or '-' }}</td>
+                    <td>
+                        {% if r.statut_traitement in ['ASSIGNE'] %}
+                        <form method="POST" action="/admin/desassigner" style="display:inline;">
+                            <input type="hidden" name="nd_propre" value="{{ r.nd_propre }}">
+                            <button type="submit" class="btn btn-ghost btn-sm">Retirer</button>
+                        </form>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <div class="export-bar">
+        <a href="#" id="exportBtn" class="btn btn-ghost" onclick="exportFiltered()">Exporter CSV (filtré)</a>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const reclaData = [
+    {% for r in reclamations %}
+    {motif: "{{ r['MOTIF NON PAIEMENT'] or '' }}", cat: "{{ r['CATEGORIE DE NON PAIEMENT'] or '' }}", statut: "{{ r.statut_traitement or 'NON ASSIGNE' }}"},
+    {% endfor %}
+];
+
+function getSelected(selectId) {
+    const sel = document.getElementById(selectId);
+    return Array.from(sel.selectedOptions).map(o => o.value);
+}
+
+function updateVolume() {
+    const motifs = getSelected('assignMotifs');
+    const cats = getSelected('assignCats');
+    let count = 0;
+    reclaData.forEach(r => {
+        if (r.statut !== 'NON ASSIGNE') return;
+        if (motifs.length > 0 && !motifs.includes(r.motif)) return;
+        if (cats.length > 0 && !cats.includes(r.cat)) return;
+        count++;
+    });
+    const el = document.getElementById('volumeInfo');
+    el.textContent = count + ' réclamation(s) disponible(s)';
+}
+
+function filterTable() {
+    const search = document.getElementById('searchInput').value.toLowerCase();
+    const statut = document.getElementById('filterStatut').value;
+    const motif = document.getElementById('filterMotif').value;
+    const cat = document.getElementById('filterCat').value;
+    document.querySelectorAll('#reclaTable tbody tr').forEach(row => {
+        const text = row.textContent.toLowerCase();
+        let show = true;
+        if (search && !text.includes(search)) show = false;
+        if (statut && row.dataset.statut !== statut) show = false;
+        if (motif && row.dataset.motif !== motif) show = false;
+        if (cat && row.dataset.cat !== cat) show = false;
+        row.style.display = show ? '' : 'none';
+    });
+}
+
+function exportFiltered() {
+    const statut = document.getElementById('filterStatut').value;
+    const motif = document.getElementById('filterMotif').value;
+    const cat = document.getElementById('filterCat').value;
+    let url = '/export/csv?';
+    if (statut) url += 'statut=' + encodeURIComponent(statut) + '&';
+    if (motif) url += 'motif=' + encodeURIComponent(motif) + '&';
+    if (cat) url += 'categorie=' + encodeURIComponent(cat) + '&';
+    window.location.href = url;
+}
+</script>
+{% endblock %}

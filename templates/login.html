@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Connexion · DXC Réclamations</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #FAFAF9;
+      --bg-elev: #FFFFFF;
+      --bg-sunken: #F4F4F2;
+      --line: #ECEAE5;
+      --line-strong: #DDD9D2;
+      --ink-1: #1A1916;
+      --ink-2: #3A3833;
+      --ink-3: #6B6862;
+      --ink-4: #9C988F;
+      --accent: #FF7900;
+      --accent-hover: #E66A00;
+      --accent-tint: #FFF4EA;
+      --accent-tint-2: #FFE6CF;
+      --accent-ink: #B85100;
+      --danger-tint: #F8E7E7;
+      --danger-ink: #8A2424;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      background: var(--bg);
+      color: var(--ink-2);
+      -webkit-font-smoothing: antialiased;
+    }
+    .left {
+      flex: 1;
+      background: var(--bg-elev);
+      border-right: 1px solid var(--line);
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 48px 64px;
+      position: relative;
+      overflow: hidden;
+    }
+    .left::after {
+      content: '';
+      position: absolute;
+      right: -120px; bottom: -120px;
+      width: 380px; height: 380px;
+      background: radial-gradient(circle, var(--accent-tint) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      position: relative;
+      z-index: 1;
+    }
+    .brand .mark {
+      width: 36px; height: 36px;
+      border-radius: 9px;
+      background: var(--ink-1);
+      color: #fff;
+      display: grid;
+      place-items: center;
+      font-weight: 700;
+      font-size: 13px;
+      letter-spacing: -0.02em;
+      position: relative;
+    }
+    .brand .mark::after {
+      content: '';
+      position: absolute;
+      right: -3px; bottom: -3px;
+      width: 10px; height: 10px;
+      border-radius: 3px;
+      background: var(--accent);
+      box-shadow: 0 0 0 2px var(--bg-elev);
+    }
+    .brand .name {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--ink-1);
+      letter-spacing: -0.01em;
+    }
+    .brand .sub {
+      font-size: 11px;
+      color: var(--ink-4);
+      margin-top: 1px;
+    }
+    .pitch {
+      max-width: 460px;
+      position: relative;
+      z-index: 1;
+    }
+    .pitch .eyebrow {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--accent-ink);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 16px;
+    }
+    .pitch h1 {
+      font-size: 40px;
+      font-weight: 600;
+      color: var(--ink-1);
+      letter-spacing: -0.03em;
+      line-height: 1.1;
+      margin-bottom: 16px;
+    }
+    .pitch p {
+      font-size: 15px;
+      color: var(--ink-3);
+      line-height: 1.55;
+    }
+    .footer-note {
+      font-size: 12px;
+      color: var(--ink-4);
+      position: relative;
+      z-index: 1;
+    }
+    .right {
+      width: 480px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 48px;
+    }
+    .form-wrap { width: 100%; max-width: 360px; }
+    .form-wrap h2 {
+      font-size: 22px;
+      font-weight: 600;
+      color: var(--ink-1);
+      letter-spacing: -0.02em;
+      margin-bottom: 4px;
+    }
+    .form-wrap .lead {
+      font-size: 13px;
+      color: var(--ink-3);
+      margin-bottom: 28px;
+    }
+    .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
+    .field label {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--ink-2);
+    }
+    .field input {
+      padding: 10px 12px;
+      background: var(--bg-elev);
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      color: var(--ink-1);
+      font-size: 14px;
+      font-family: inherit;
+      outline: none;
+      transition: border-color .15s, box-shadow .15s;
+    }
+    .field input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-tint-2);
+    }
+    .field input::placeholder { color: var(--ink-4); }
+    .submit {
+      width: 100%;
+      padding: 11px;
+      background: var(--accent);
+      color: #fff;
+      border: 1px solid var(--accent);
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+      transition: background .15s;
+      margin-top: 8px;
+      box-shadow: 0 1px 0 rgba(184,81,0,.2), inset 0 1px 0 rgba(255,255,255,.15);
+    }
+    .submit:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+    .error {
+      background: var(--danger-tint);
+      color: var(--danger-ink);
+      padding: 10px 12px;
+      border-radius: 8px;
+      font-size: 13px;
+      margin-bottom: 16px;
+      border: 1px solid rgba(184,50,50,.2);
+    }
+    .helper {
+      font-size: 11px;
+      color: var(--ink-4);
+      margin-top: 16px;
+      text-align: center;
+    }
+    @media (max-width: 900px) {
+      body { flex-direction: column; }
+      .left { padding: 32px 24px; }
+      .right { width: 100%; padding: 32px 24px; }
+      .pitch h1 { font-size: 28px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="left">
+    <div class="brand">
+      <div class="mark">DX</div>
+      <div>
+        <div class="name">DXC Réclamations</div>
+        <div class="sub">Direction de l'Expérience Client</div>
+      </div>
+    </div>
+    <div class="pitch">
+      <div class="eyebrow">Back-office · Réclamations</div>
+      <h1>Le suivi de vos dossiers, simplifié.</h1>
+      <p>Assignez, traitez et analysez les réclamations clients en quelques clics. Tableaux de bord en temps réel, file de traitement personnelle, redistribution rapide.</p>
+    </div>
+    <div class="footer-note">© 2026 — DXC. Tous droits réservés.</div>
+  </div>
+  <div class="right">
+    <div class="form-wrap">
+      <h2>Connexion</h2>
+      <p class="lead">Accédez à votre espace de travail.</p>
+      {% if error %}<div class="error">{{ error }}</div>{% endif %}
+      <form method="POST" action="/login">
+        <div class="field">
+          <label for="login">Identifiant</label>
+          <input id="login" type="text" name="login" placeholder="Ex. YRPV3142" required autofocus autocomplete="username">
+        </div>
+        <div class="field">
+          <label for="password">Mot de passe</label>
+          <input id="password" type="password" name="password" placeholder="••••••••" required autocomplete="current-password">
+        </div>
+        <button type="submit" class="submit">Se connecter</button>
+      </form>
+      <div class="helper">Problème de connexion ? Contactez votre administrateur.</div>
+    </div>
+  </div>
+</body>
+</html>

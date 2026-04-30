@@ -1,0 +1,163 @@
+{% extends "base.html" %}
+{% block title %}Admin - Dashboard{% endblock %}
+{% block page_title %}Dashboard{% endblock %}
+
+{% block sidebar_nav %}
+<a href="/admin/general">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+    Vue d'ensemble
+</a>
+<a href="/admin/corbeille">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3,6 5,6 21,6"/><path d="M19,6v14a2,2,0,0,1-2,2H7a2,2,0,0,1-2-2V6m3,0V4a2,2,0,0,1,2-2h4a2,2,0,0,1,2,2v2"/></svg>
+    Corbeille
+</a>
+<a href="/admin/dashboard" class="active">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+    Dashboard
+</a>
+{% endblock %}
+
+{% block content %}
+<div class="stats-row">
+    <div class="stat-card">
+        <div class="stat-number">{{ stats.total }}</div>
+        <div class="stat-label">Total réclamations</div>
+    </div>
+    <div class="stat-card green">
+        <div class="stat-number">{{ stats.traitees }}</div>
+        <div class="stat-label">Traitées</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-number">{{ stats.taux }}%</div>
+        <div class="stat-label">Taux de traitement</div>
+    </div>
+    <div class="stat-card" style="border-left-color:#C62828;">
+        <div class="stat-number" style="color:#C62828;">{{ stats.non_decroche }}</div>
+        <div class="stat-label">Non décrochés ({{ stats.pct_non_decroche }}%)</div>
+    </div>
+</div>
+
+<div class="grid-2">
+    <!-- Jauge taux de traitement -->
+    <div class="chart-box" style="text-align:center;">
+        <h3>Taux de traitement global</h3>
+        <canvas id="gaugeChart" width="250" height="250" style="margin:0 auto;max-width:250px;"></canvas>
+    </div>
+
+    <!-- Volume par jour -->
+    <div class="chart-box">
+        <h3>Volume de réclamations par jour</h3>
+        <canvas id="lineChart" height="200"></canvas>
+    </div>
+</div>
+
+<!-- Histogramme motifs traité vs non traité -->
+<div class="chart-box">
+    <h3>Volume par motif — Traité vs Non traité (Top 15)</h3>
+    <canvas id="barChart" height="300"></canvas>
+</div>
+
+<div class="export-bar">
+    <a href="/export/csv" class="btn btn-ghost">Exporter CSV</a>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const motifLabels = {{ motif_labels|safe }};
+const motifTraite = {{ motif_traite_vals|safe }};
+const motifNonTraite = {{ motif_non_traite_vals|safe }};
+const parJour = {{ par_jour|safe }};
+const taux = {{ stats.taux }};
+
+// Gauge
+new Chart(document.getElementById('gaugeChart'), {
+    type: 'doughnut',
+    data: {
+        datasets: [{
+            data: [taux, 100 - taux],
+            backgroundColor: ['#FF7900', '#E8E8E8'],
+            borderWidth: 0
+        }]
+    },
+    options: {
+        cutout: '75%',
+        rotation: -90,
+        circumference: 180,
+        plugins: {
+            legend: { display: false },
+            tooltip: { enabled: false }
+        }
+    },
+    plugins: [{
+        id: 'gaugeText',
+        afterDraw(chart) {
+            const { ctx, chartArea } = chart;
+            ctx.save();
+            ctx.font = 'bold 32px DM Sans';
+            ctx.fillStyle = '#000';
+            ctx.textAlign = 'center';
+            ctx.fillText(taux + '%', chartArea.width / 2 + chartArea.left, chartArea.height - 20);
+            ctx.restore();
+        }
+    }]
+});
+
+// Line chart
+new Chart(document.getElementById('lineChart'), {
+    type: 'line',
+    data: {
+        labels: Object.keys(parJour).map(d => d.slice(5)),
+        datasets: [{
+            label: 'Réclamations',
+            data: Object.values(parJour),
+            borderColor: '#FF7900',
+            backgroundColor: 'rgba(255,121,0,0.1)',
+            fill: true,
+            tension: 0.3,
+            pointRadius: 3,
+            pointBackgroundColor: '#FF7900'
+        }]
+    },
+    options: {
+        plugins: { legend: { display: false } },
+        scales: {
+            x: { grid: { display: false } },
+            y: { beginAtZero: true, grid: { color: '#f0f0f0' } }
+        }
+    }
+});
+
+// Bar chart motifs traité vs non traité
+new Chart(document.getElementById('barChart'), {
+    type: 'bar',
+    data: {
+        labels: motifLabels,
+        datasets: [
+            {
+                label: 'Traité',
+                data: motifTraite,
+                backgroundColor: '#50BE87',
+                borderRadius: 4
+            },
+            {
+                label: 'Non traité',
+                data: motifNonTraite,
+                backgroundColor: '#FF7900',
+                borderRadius: 4
+            }
+        ]
+    },
+    options: {
+        indexAxis: 'y',
+        plugins: {
+            legend: { position: 'top', labels: { font: { size: 12, family: 'DM Sans' }, padding: 16 } }
+        },
+        scales: {
+            x: { stacked: true, beginAtZero: true, grid: { color: '#f0f0f0' } },
+            y: { stacked: true, grid: { display: false }, ticks: { font: { size: 11 } } }
+        }
+    }
+});
+</script>
+{% endblock %}
