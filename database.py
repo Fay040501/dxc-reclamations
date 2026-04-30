@@ -65,28 +65,24 @@ def execute_many(sql, params_list):
         conn.close()
 
 
-def execute_db_transaction(sql_select, params_select, sql_update, params_update_prefix):
+def execute_db_transaction(sql_select, params_select, sql_update_prefix, params_update_prefix):
     """
     Transaction atomique pour le dispatch — évite les race conditions.
-    Utilise une sous-requête pour contourner la limitation LIMIT + FOR UPDATE
-    sur les bases PostgreSQL cloud (Neon, Supabase, Render).
-    Retourne la liste des id_hash sélectionnés et mis à jour.
+    sql_update_prefix : UPDATE ... SET ... WHERE id_hash IN
+    Les placeholders IN (...) sont construits ici dynamiquement.
     """
     conn = get_conn()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            # Étape 1 : sélectionner les IDs sans FOR UPDATE (compatible cloud)
+            # Étape 1 : sélectionner les IDs
             cur.execute(sql_select, params_select)
             rows = [dict(r) for r in cur.fetchall()]
             if rows:
                 ids = [r["id_hash"] for r in rows]
+                # Construire le SQL UPDATE en concaténation pure — pas de .format()
                 placeholders = ",".join(["%s"] * len(ids))
-                # Étape 2 : UPDATE atomique sur les IDs sélectionnés
-                # Le WHERE id_hash IN (...) garantit qu'on ne touche que ces lignes
-                cur.execute(
-                    sql_update.format(placeholders=placeholders),
-                    params_update_prefix + ids
-                )
+                sql_update = sql_update_prefix + f" ({placeholders})"
+                cur.execute(sql_update, params_update_prefix + ids)
         conn.commit()
         return rows
     except Exception as e:
