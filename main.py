@@ -25,6 +25,9 @@ SOUS_MOTIFS = {
 # Cache filtres
 FILTERS_CACHE = {"data": None, "loaded_at": None}
 
+# Sessions actives — un seul token valide par login
+ACTIVE_SESSIONS = {}  # { login: token }
+
 def load_filters_cache():
     annees = [r["a"] for r in query_db("SELECT DISTINCT EXTRACT(YEAR FROM startdate)::text AS a FROM tb_reclamations WHERE startdate IS NOT NULL ORDER BY a DESC")]
     mois_set = [r["m"] for r in query_db("SELECT DISTINCT LPAD(EXTRACT(MONTH FROM startdate)::text, 2, '0') AS m FROM tb_reclamations WHERE startdate IS NOT NULL ORDER BY m")]
@@ -45,7 +48,14 @@ def get_current_user(request: Request) -> dict | None:
     token = request.cookies.get("token")
     if not token:
         return None
-    return decode_token(token)
+    user = decode_token(token)
+    if not user:
+        return None
+    # Vérifier que ce token est bien le token actif pour ce login
+    # Si quelqu'un s'est reconnecté ailleurs, ce token est invalidé
+    if ACTIVE_SESSIONS.get(user["login"]) != token:
+        return None
+    return user
 
 def get_utilisateurs():
     return {k: v for k, v in USERS.items() if v["role"] == "utilisateur"}
@@ -93,6 +103,8 @@ async def login_submit(request: Request, login: str = Form(...), password: str =
     if not user:
         return templates.TemplateResponse("login.html", {"request": request, "error": "Login ou mot de passe incorrect"})
     token = create_token(user)
+    # Enregistrer le token actif — invalide toute session précédente pour ce login
+    ACTIVE_SESSIONS[user["login"]] = token
     response = RedirectResponse(url="/app", status_code=303)
     response.set_cookie(key="token", value=token, httponly=True, max_age=28800)
     return response
@@ -119,7 +131,12 @@ async def refresh_token(request: Request, response: Response):
     return {"refreshed": True}
 
 @app.get("/logout")
-async def logout():
+async def logout(request: Request):
+    token = request.cookies.get("token")
+    if token:
+        user = decode_token(token)
+        if user and ACTIVE_SESSIONS.get(user["login"]) == token:
+            del ACTIVE_SESSIONS[user["login"]]
     response = RedirectResponse(url="/login", status_code=303)
     response.delete_cookie("token")
     return response
