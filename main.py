@@ -14,12 +14,67 @@ app = FastAPI(title="DXC Réclamations")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
+# Sous-motifs par catégorie ou motif
+# Si un libellé existe dans les deux, une seule entrée couvre les deux cas
 SOUS_MOTIFS = {
-    "TRANSFERT DE LIGNE / DEMENAGEMENT": ["ABANDON DE LIGNE", "NOUVEL ABONNEMENT", "CHURN", "DEMANDE INITIE", "ZONE NON FIBREE"],
-    "TRANSFERT DE LIGNE / DÉMÉNAGEMENT": ["ABANDON DE LIGNE", "NOUVEL ABONNEMENT", "CHURN", "DEMANDE INITIE", "ZONE NON FIBREE"],
-    "CHURN": ["ABANDON DE LIGNE", "OFFRE CONCURRENTE", "PROBLEME TECHNIQUE"],
-    "DEMANDE DE RESILIATION": ["ABANDON DE LIGNE", "OFFRE CONCURRENTE", "PROBLEME TECHNIQUE"],
-    "DEMANDE RÉSILIATION": ["ABANDON DE LIGNE", "OFFRE CONCURRENTE", "PROBLEME TECHNIQUE"],
+    # ── Catégorie / Motif : CHURN et DEMANDE DE RESILIATION (mêmes sous-motifs)
+    "CHURN": [
+        "NOUVEL ABONNEMENT", "DÉCISION PERSONNELLE", "ZONE NON FIBRÉE",
+        "PROBLEME TECHNIQUE", "LIGNE MULTIPLE", "VOYAGE", "UTILISATEUR INCONNU"
+    ],
+    "DEMANDE DE RESILIATION": [
+        "NOUVEL ABONNEMENT", "DÉCISION PERSONNELLE", "ZONE NON FIBRÉE",
+        "PROBLEME TECHNIQUE", "LIGNE MULTIPLE", "VOYAGE", "UTILISATEUR INCONNU"
+    ],
+
+    # ── Motif : INSTALLATION NON EFFECTUE et PAS ENCORE INSTALLE (mêmes sous-motifs)
+    "INSTALLATION NON EFFECTUE": [
+        "PB SATURE", "IMMEUBLE OU ZONE NON FIBRE", "IMPLANTATION DE POTEAUX",
+        "CLIENT REMBOURSEE", "ANNULATION DE COMMANDE", "EN ATTENTE D'INSTALLATION"
+    ],
+    "PAS ENCORE INSTALLE": [
+        "PB SATURE", "IMMEUBLE OU ZONE NON FIBRE", "IMPLANTATION DE POTEAUX",
+        "CLIENT REMBOURSEE", "ANNULATION DE COMMANDE", "EN ATTENTE D'INSTALLATION"
+    ],
+
+    # ── Motif : TRANSFERT DE LIGNE et TRANSFERT NON EFFECTUE (mêmes sous-motifs)
+    "TRANSFERT DE LIGNE": [
+        "ABANDON DE LIGNE", "ZONE NON FIBRE", "DEMANDE INITIE", "INSTALLATION KO"
+    ],
+    "TRANSFERT NON EFFECTUE": [
+        "ABANDON DE LIGNE", "ZONE NON FIBRE", "DEMANDE INITIE", "INSTALLATION KO"
+    ],
+}
+
+# Motifs réels prédéfinis par catégorie/motif (select + "Autre" libre)
+# None = champ texte libre uniquement
+MOTIFS_REELS = {
+    "CHURN": [
+        "DECISION PERSONNELLE", "TRANSFERT HORS DELAI", "TRANSFERT NON EFFECTIF",
+        "CHANGEMENT D'OFFRE", "PROBLEME FINANCIER", "SUBSTITUTION DE LIGNE",
+        "RECHARGEMENT IMPOSSIBLE", "AUTRES"
+    ],
+    "DEMANDE DE RESILIATION": [
+        "DECISION PERSONNELLE", "TRANSFERT HORS DELAI", "TRANSFERT NON EFFECTIF",
+        "CHANGEMENT D'OFFRE", "PROBLEME FINANCIER", "SUBSTITUTION DE LIGNE",
+        "RECHARGEMENT IMPOSSIBLE", "AUTRES"
+    ],
+    "INSTALLATION NON EFFECTUE": None,   # texte libre
+    "PAS ENCORE INSTALLE": None,          # texte libre
+    "TRANSFERT DE LIGNE": [
+        "ZONE NON FIBREE", "IMMEUBLE NON FIBRE", "DEMANDE INITIEE",
+        "INSTALLATION EN COURS", "INSTALLATION OK", "DEMENAGEMENT NOK",
+        "DEMENAGEMENT EN COURS", "HORS PERIMETRE", "NOUVEAU RDV",
+        "DEMANDE A INITIER", "TRANSFERT ANNULE", "ZONE NON ELECTRIFIE",
+        "CLIENTS INDECIS", "AUTRES"
+    ],
+    "TRANSFERT NON EFFECTUE": [
+        "ZONE NON FIBREE", "IMMEUBLE NON FIBRE", "DEMANDE INITIEE",
+        "INSTALLATION EN COURS", "INSTALLATION OK", "DEMENAGEMENT NOK",
+        "DEMENAGEMENT EN COURS", "HORS PERIMETRE", "NOUVEAU RDV",
+        "DEMANDE A INITIER", "TRANSFERT ANNULE", "ZONE NON ELECTRIFIE",
+        "CLIENTS INDECIS", "AUTRES"
+    ],
 }
 
 # Cache filtres
@@ -154,6 +209,7 @@ async def app_page(request: Request):
         "user_json": json.dumps(user),
         "utilisateurs_json": json.dumps({k: {"nom_complet": v["nom_complet"]} for k, v in get_utilisateurs().items()}),
         "sous_motifs_json": json.dumps(SOUS_MOTIFS),
+        "motifs_reels_json": json.dumps(MOTIFS_REELS, ensure_ascii=False),
         "filters_json": json.dumps(filters_data),
         "default_annee": last_annee,
         "default_mois": last_mois
@@ -460,6 +516,23 @@ async def api_desassigner(request: Request):
     return {"success": True}
 
 
+@app.get("/api/stock-agent")
+async def api_stock_agent(request: Request, agent: str):
+    """Retourne le stock de réclamations non traitées d'un agent, groupé par motif."""
+    user = get_current_user(request)
+    if not user or user["role"] != "admin":
+        raise HTTPException(status_code=403)
+    rows = query_db("""
+        SELECT
+            COALESCE(motif_non_paiement, categorie_de_non_paiement, 'Non défini') AS motif,
+            COUNT(*) AS volume
+        FROM tb_reclamations
+        WHERE assigne_a = %s AND statut_traitement = 'ASSIGNE'
+        GROUP BY motif ORDER BY volume DESC
+    """, [agent])
+    return rows
+
+
 @app.post("/api/redistribuer")
 async def api_redistribuer(request: Request):
     user = get_current_user(request)
@@ -467,17 +540,25 @@ async def api_redistribuer(request: Request):
         raise HTTPException(status_code=403)
     body = await request.json()
 
-    sql = """SELECT id_hash FROM tb_reclamations
-             WHERE assigne_a = %s AND statut_traitement != 'TRAITE'
-             ORDER BY startdate LIMIT %s"""
-    rows = query_db(sql, [body["agent_source"], body["nombre"]])
+    # Filtrer par motif si précisé (Option C)
+    if body.get("motif"):
+        sql = """SELECT id_hash FROM tb_reclamations
+                 WHERE assigne_a = %s AND statut_traitement = 'ASSIGNE'
+                 AND COALESCE(motif_non_paiement, categorie_de_non_paiement) = %s
+                 ORDER BY startdate LIMIT %s"""
+        rows = query_db(sql, [body["agent_source"], body["motif"], body["nombre"]])
+    else:
+        sql = """SELECT id_hash FROM tb_reclamations
+                 WHERE assigne_a = %s AND statut_traitement = 'ASSIGNE'
+                 ORDER BY startdate LIMIT %s"""
+        rows = query_db(sql, [body["agent_source"], body["nombre"]])
 
     if rows:
         ids = [r["id_hash"] for r in rows]
         placeholders = ",".join(["%s"] * len(ids))
         execute_db(
             f"UPDATE tb_reclamations SET assigne_a = %s, date_assignation = %s WHERE id_hash IN ({placeholders})",
-            [body["agent_cible"], datetime.now().isoformat()] + ids
+            [body["agent_cible"], datetime.now()] + ids
         )
 
     return {"redistributed": len(rows)}

@@ -19,6 +19,7 @@
 window.CURRENT_USER = {{ user_json|safe }};
 window.UTILISATEURS = {{ utilisateurs_json|safe }};
 window.SOUS_MOTIFS = {{ sous_motifs_json|safe }};
+window.MOTIFS_REELS = {{ motifs_reels_json|safe }};
 window.PRELOADED_FILTERS = {{ filters_json|safe }};
 window.DEFAULT_ANNEE = "{{ default_annee }}";
 window.DEFAULT_MOIS = "{{ default_mois }}";
@@ -741,11 +742,127 @@ function DateRangeFilter({ label, du, au, onDu, onAu, onClear }) {
   );
 }
 
+// ══════════════════════════════════════════════════════════════════
+// Redistribution Option C — stock par motif + choix motif + volume
+// ══════════════════════════════════════════════════════════════════
+function RedistPanel({ agents, handleRedist, showToast, apiFetch }) {
+  const [source, setSource] = useState('');
+  const [cible, setCible] = useState('');
+  const [stock, setStock] = useState([]);  // [{ motif, volume }]
+  const [loadingStock, setLoadingStock] = useState(false);
+  const [motifChoisi, setMotifChoisi] = useState('');
+  const [nombre, setNombre] = useState('');
+
+  // Charger le stock dès qu'un agent source est sélectionné
+  const loadStock = async (agent) => {
+    if (!agent) { setStock([]); setMotifChoisi(''); return; }
+    setLoadingStock(true);
+    try {
+      const res = await apiFetch('/api/stock-agent?agent=' + encodeURIComponent(agent));
+      const data = await res.json();
+      setStock(data);
+      setMotifChoisi('');
+    } catch(e) { /* toast géré */ }
+    finally { setLoadingStock(false); }
+  };
+
+  const volumeMotif = motifChoisi
+    ? (stock.find(s=>s.motif===motifChoisi)?.volume || 0)
+    : stock.reduce((a,s)=>a+s.volume, 0);
+
+  const onRedist = () => {
+    if (!source) { showToast('warn', 'Veuillez sélectionner un agent source.'); return; }
+    if (!cible)  { showToast('warn', 'Veuillez sélectionner un agent cible.'); return; }
+    if (!nombre || parseInt(nombre)<=0) { showToast('warn', 'Veuillez saisir un nombre valide.'); return; }
+    if (source === cible) { showToast('warn', "Agent source et agent cible doivent être différents."); return; }
+    handleRedist({ agent_source: source, agent_cible: cible, motif: motifChoisi, nombre: parseInt(nombre) });
+  };
+
+  return (
+    <div className="action-panel" style={{flexDirection:'column', alignItems:'stretch', gap:16}}>
+      <div className="lead">
+        <h4>Redistribuer des réclamations</h4>
+        <p>Voir le stock d'un agent et transférer vers un autre</p>
+      </div>
+
+      {/* Sélection agent source */}
+      <div style={{display:'flex', gap:16, flexWrap:'wrap', alignItems:'flex-end'}}>
+        <Field label="Agent source">
+          <select className="select" style={{minWidth:200}} value={source} onChange={e=>{
+            setSource(e.target.value);
+            loadStock(e.target.value);
+          }}>
+            <option value="">— Choisir —</option>
+            {Object.keys(agents).map(a=>{const u=UTILISATEURS[a];return <option key={a} value={a}>{u?u.nom_complet:a} ({agents[a]?.restant||0})</option>;})}
+          </select>
+        </Field>
+        <Field label="Agent cible">
+          <select className="select" style={{minWidth:200}} value={cible} onChange={e=>setCible(e.target.value)}>
+            <option value="">— Choisir —</option>
+            {Object.entries(UTILISATEURS).filter(([k])=>k!==source).map(([k,v])=><option key={k} value={k}>{v.nom_complet}</option>)}
+          </select>
+        </Field>
+      </div>
+
+      {/* Stock par motif */}
+      {source && (
+        <div>
+          <div style={{fontSize:11, fontWeight:700, textTransform:'uppercase', letterSpacing:'.7px', color:'var(--muted,#999)', marginBottom:8}}>
+            Stock de {UTILISATEURS[source]?.nom_complet||source}
+          </div>
+          {loadingStock ? <div className="loading" style={{padding:'12px 0'}}>Chargement…</div> : (
+            <div style={{display:'flex', flexWrap:'wrap', gap:8, marginBottom:12}}>
+              <div
+                onClick={()=>setMotifChoisi('')}
+                style={{
+                  cursor:'pointer', padding:'6px 14px', borderRadius:20, fontSize:12, fontWeight:600,
+                  background: motifChoisi==='' ? 'var(--accent,#FF7900)' : '#f0f0f0',
+                  color: motifChoisi==='' ? '#fff' : 'var(--ink-2,#444)',
+                  border: motifChoisi==='' ? 'none' : '1px solid #ddd'
+                }}
+              >
+                Tous ({stock.reduce((a,s)=>a+s.volume,0)})
+              </div>
+              {stock.map(s=>(
+                <div key={s.motif}
+                  onClick={()=>setMotifChoisi(s.motif)}
+                  style={{
+                    cursor:'pointer', padding:'6px 14px', borderRadius:20, fontSize:12, fontWeight:600,
+                    background: motifChoisi===s.motif ? 'var(--accent,#FF7900)' : '#f0f0f0',
+                    color: motifChoisi===s.motif ? '#fff' : 'var(--ink-2,#444)',
+                    border: motifChoisi===s.motif ? 'none' : '1px solid #ddd'
+                  }}
+                >
+                  {s.motif} ({s.volume})
+                </div>
+              ))}
+              {stock.length===0 && <span style={{fontSize:12,color:'var(--muted)'}}>Aucune réclamation en attente</span>}
+            </div>
+          )}
+
+          {/* Nombre + bouton */}
+          {stock.length > 0 && (
+            <div style={{display:'flex', gap:12, alignItems:'flex-end'}}>
+              <Field label={`Nombre à redistribuer${motifChoisi ? ` (max ${volumeMotif})` : ` (max ${volumeMotif})`}`}>
+                <input type="number" className="input" min="1" max={volumeMotif} style={{width:100}}
+                  value={nombre} onChange={e=>setNombre(e.target.value)}
+                  placeholder={`max ${volumeMotif}`}
+                />
+              </Field>
+              <Button variant="primary" icon="arrow" onClick={onRedist}>Redistribuer</Button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AdminCorbeille() {
   const [data, setData] = useState([]);
   const [stats, setStats] = useState({});
   const [loading, setLoading] = useState(true);
-  const [redistForm, setRedistForm] = useState({ agent_source:'', agent_cible:Object.keys(UTILISATEURS)[0]||'', nombre:10 });
+  const { apiFetch, showToast } = React.useContext(AppContext);
 
   // Filtres date assignation (tableau volume par agent)
   const [assignDu, setAssignDu] = useState('');
@@ -775,7 +892,6 @@ function AdminCorbeille() {
     return p.toString();
   };
 
-  const { apiFetch, showToast } = React.useContext(AppContext);
   const abortRef = React.useRef(null);
 
   // #16 : AbortController pour annuler les requêtes stale
@@ -801,15 +917,11 @@ function AdminCorbeille() {
   };
   useEffect(()=>{ load(); }, [assignDu, assignAu, traitDu, traitAu]);
 
-  // #15 : validation agent_source avant redistribution
-  const handleRedist = async () => {
-    if (!redistForm.agent_source) {
-      showToast('warn', 'Veuillez sélectionner un agent source avant de redistribuer.');
-      return;
-    }
+  // Redistribution Option C — reçoit { agent_source, agent_cible, motif, nombre }
+  const handleRedist = async (params) => {
     try {
-      await apiFetch('/api/redistribuer', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(redistForm) });
-      showToast('success', 'Redistribution effectuée avec succès.');
+      await apiFetch('/api/redistribuer', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(params) });
+      showToast('success', `${params.nombre} réclamation(s) redistribuée(s) avec succès.`);
       load();
     } catch(e) { /* toast géré par apiFetch */ }
   };
@@ -875,29 +987,7 @@ function AdminCorbeille() {
         </div>
       </Card>
 
-      <div className="action-panel">
-        <div className="lead">
-          <h4>Redistribuer des réclamations</h4>
-          <p>Transférer un volume d'un agent vers un autre</p>
-        </div>
-        <div className="controls">
-          <Field label="De">
-            <select className="select" style={{minWidth:200}} value={redistForm.agent_source} onChange={e=>setRedistForm({...redistForm, agent_source:e.target.value})}>
-              <option value="">— Choisir —</option>
-              {Object.keys(agents).map(a=>{const u=UTILISATEURS[a];return <option key={a} value={a}>{u?u.nom_complet:a}</option>;})}
-            </select>
-          </Field>
-          <Field label="Vers">
-            <select className="select" style={{minWidth:200}} value={redistForm.agent_cible} onChange={e=>setRedistForm({...redistForm, agent_cible:e.target.value})}>
-              {Object.entries(UTILISATEURS).map(([k,v])=><option key={k} value={k}>{v.nom_complet}</option>)}
-            </select>
-          </Field>
-          <Field label="Nombre">
-            <input type="number" className="input" min="1" style={{width:80}} value={redistForm.nombre} onChange={e=>setRedistForm({...redistForm, nombre:parseInt(e.target.value)||0})}/>
-          </Field>
-          <Button variant="primary" icon="arrow" onClick={handleRedist}>Redistribuer</Button>
-        </div>
-      </div>
+      <RedistPanel agents={agents} handleRedist={handleRedist} showToast={showToast} apiFetch={apiFetch}/>
 
       <Card title={`Réclamations traitées (${data.length})`} flush>
         {loading ? <div className="loading">Chargement…</div> : (
@@ -915,7 +1005,7 @@ function AdminCorbeille() {
                       <td className="cell-strong">{r.identite_client||'—'}</td>
                       <td className="cell-clip" title={r.motif_non_paiement||''}>{r.motif_non_paiement||r.categorie_de_non_paiement||'—'}</td>
                       <td>{r.statut_appel==='DECROCHE'?<Badge tone="success">Décroché</Badge>:r.statut_appel?<Badge tone="danger">Pas décroché</Badge>:'—'}</td>
-                      <td>{r.niveau==='1'?<Badge tone="info">N1</Badge>:r.niveau==='2'?<Badge tone="warn">N2</Badge>:'—'}</td>
+                      <td>{r.niveau==='1'?<Badge tone="info">N1</Badge>:r.niveau==='2'?<Badge tone="warn">N2</Badge>:r.niveau==='3'?<Badge tone="danger">N3</Badge>:'—'}</td>
                       <td>{r.sous_motif||'—'}</td>
                       <td className="mono">{r.id_dossier||'—'}</td>
                       <td>{u?<><Avatar initials={initials(u.nom_complet)}/>{u.nom_complet}</>:'—'}</td>
@@ -992,7 +1082,11 @@ function Dashboard() {
 
 // =================== Page : User General ===================
 function TraitForm({ rec, form, setForm, onSubmit }) {
-  const sousMotifOptions = SOUS_MOTIFS[rec.motif_non_paiement] || SOUS_MOTIFS[rec.categorie_de_non_paiement] || [];
+  const key = rec.motif_non_paiement || rec.categorie_de_non_paiement || '';
+  const sousMotifOptions = SOUS_MOTIFS[key] || [];
+  // Motifs réels : liste prédéfinie ou null (texte libre)
+  const motifReelOptions = MOTIFS_REELS ? (MOTIFS_REELS[key] || null) : null;
+  const showAutreInput = motifReelOptions && form.motif_reel_select === 'AUTRES';
   return (
     <div className="treat-form">
       <h4>Traitement BO</h4>
@@ -1009,6 +1103,7 @@ function TraitForm({ rec, form, setForm, onSubmit }) {
             <option value="">— Choisir —</option>
             <option value="1">Niveau 1</option>
             <option value="2">Niveau 2</option>
+            <option value="3">Niveau 3</option>
           </select>
         </Field>
         <Field label="Zone">
@@ -1029,9 +1124,36 @@ function TraitForm({ rec, form, setForm, onSubmit }) {
         </div>
       )}
       <div style={{marginBottom:12}}>
-        <Field label="Motif réel constaté">
-          <input className="input" placeholder="Description du motif réel" value={form.motif_reel} onChange={e=>setForm({...form, motif_reel:e.target.value})}/>
-        </Field>
+        {motifReelOptions ? (
+          <Fragment>
+            <Field label="Motif réel constaté">
+              <select className="select" value={form.motif_reel_select||''} onChange={e=>{
+                const val = e.target.value;
+                setForm({...form,
+                  motif_reel_select: val,
+                  motif_reel: val === 'AUTRES' ? '' : val
+                });
+              }}>
+                <option value="">— Choisir —</option>
+                {motifReelOptions.map(m=><option key={m} value={m}>{m}</option>)}
+              </select>
+            </Field>
+            {showAutreInput && (
+              <div style={{marginTop:8}}>
+                <Field label="Préciser le motif">
+                  <input className="input" placeholder="Décrivez le motif réel…"
+                    value={form.motif_reel}
+                    onChange={e=>setForm({...form, motif_reel:e.target.value})}
+                  />
+                </Field>
+              </div>
+            )}
+          </Fragment>
+        ) : (
+          <Field label="Motif réel constaté">
+            <input className="input" placeholder="Description du motif réel" value={form.motif_reel} onChange={e=>setForm({...form, motif_reel:e.target.value})}/>
+          </Field>
+        )}
       </div>
       <Field label="Commentaire">
         <textarea className="textarea" placeholder="Détails du contact, engagements pris…" value={form.commentaire_bo} onChange={e=>setForm({...form, commentaire_bo:e.target.value})}/>
@@ -1048,7 +1170,7 @@ function TraitForm({ rec, form, setForm, onSubmit }) {
         <Button variant="primary" icon="check" onClick={()=>{
           if (!form.statut_appel) { setForm({...form, _error:true}); return; }
           // #20 : exclure _error du body envoyé au backend
-          const { _error, ...clean } = form;
+          const { _error, motif_reel_select, ...clean } = form;
           onSubmit({...clean, id_hash:rec.id_hash});
         }}>Valider le traitement</Button>
       </div>
@@ -1060,7 +1182,7 @@ function ReclaCard({ rec, expanded, onToggle, onTraiter, onModifComment }) {
   const done = rec.statut_traitement === 'TRAITE';
   const [comment, setComment] = useState(rec.commentaire_bo||'');
   // #21 : état formulaire remonté ici pour survivre aux fermetures/réouvertures
-  const [traitForm, setTraitForm] = useState({ statut_appel:'', motif_reel:'', niveau:'', commentaire_bo:'', zone_client:'', sous_motif:'', id_dossier:'', _error:false });
+  const [traitForm, setTraitForm] = useState({ statut_appel:'', motif_reel:'', motif_reel_select:'', niveau:'', commentaire_bo:'', zone_client:'', sous_motif:'', id_dossier:'', _error:false });
   return (
     <div className={`recla ${expanded?'expanded':''} ${done?'done':''}`}>
       <div className="recla-head" onClick={onToggle}>
@@ -1092,7 +1214,7 @@ function ReclaCard({ rec, expanded, onToggle, onTraiter, onModifComment }) {
               <div className="detail-grid">
                 <div className="it"><div className="lb">Statut appel</div><div className="vl">{rec.statut_appel||'—'}</div></div>
                 <div className="it"><div className="lb">Motif réel</div><div className="vl">{rec.motif_reel||'—'}</div></div>
-                <div className="it"><div className="lb">Niveau</div><div className="vl">{rec.niveau==='1'?'N1':rec.niveau==='2'?'N2':'—'}</div></div>
+                <div className="it"><div className="lb">Niveau</div><div className="vl">{rec.niveau==='1'?'N1':rec.niveau==='2'?'N2':rec.niveau==='3'?'N3':'—'}</div></div>
                 <div className="it"><div className="lb">Zone</div><div className="vl">{rec.zone_client||'—'}</div></div>
                 <div className="it"><div className="lb">Sous-motif</div><div className="vl">{rec.sous_motif||'—'}</div></div>
                 <div className="it"><div className="lb">ID Dossier</div><div className="vl mono">{rec.id_dossier||'—'}</div></div>
