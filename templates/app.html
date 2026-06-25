@@ -29,6 +29,9 @@ window.DEFAULT_MOIS = "{{ default_mois }}";
 {% raw %}
 const { useState, useEffect, useRef, useCallback, useMemo, Fragment } = React;
 
+const DEFAULT_ANNEE = window.DEFAULT_ANNEE || new Date().getFullYear().toString();
+const DEFAULT_MOIS = window.DEFAULT_MOIS || String(new Date().getMonth()+1).padStart(2,'0');
+
 const initials = (nom) => (nom||'').split(' ').map(s=>s[0]).filter(Boolean).slice(0,2).join('').toUpperCase();
 
 // =================== Icons ===================
@@ -423,7 +426,12 @@ function AppProvider({ children }) {
 const filterSearch = (data, search) => {
   if (!search) return data;
   const s = search.toLowerCase();
-  return data.filter(r => JSON.stringify(r).toLowerCase().includes(s));
+  return data.filter(r =>
+    (r.nd_clean||'').toLowerCase().includes(s) ||
+    (r.identite_client||'').toLowerCase().includes(s) ||
+    (r.motif_non_paiement||'').toLowerCase().includes(s) ||
+    (r.categorie_de_non_paiement||'').toLowerCase().includes(s)
+  );
 };
 
 // =================== Charts (SVG natifs) ===================
@@ -504,9 +512,14 @@ function DonutN1N2({ n1, n2 }) {
 }
 
 // =================== Page : Admin General ===================
+const PER_PAGE = 100;
+
 function AdminGeneral() {
   const [filters, setFilters] = useState({ annee: DEFAULT_ANNEE, mois: DEFAULT_MOIS });
   const [data, setData] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [breakdown, setBreakdown] = useState({ non_assignees:0, assignees:0, traitees:0 });
+  const [currPage, setCurrPage] = useState(1);
   const [loading, setLoading] = useState(true);
 
   // Dispatcher CATEGORIE (indépendant, multi-select)
@@ -514,57 +527,64 @@ function AdminGeneral() {
   const [catNombre, setCatNombre] = useState('');
   const [catAgent, setCatAgent] = useState(Object.keys(UTILISATEURS)[0]||'');
   const [catLoading, setCatLoading] = useState(false);
+  const catSubmitting = useRef(false);
 
   // Dispatcher MOTIF (indépendant, multi-select)
   const [motSelected, setMotSelected] = useState([]);
   const [motNombre, setMotNombre] = useState('');
   const [motAgent, setMotAgent] = useState(Object.keys(UTILISATEURS)[0]||'');
   const [motLoading, setMotLoading] = useState(false);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    const res = await fetch('/api/reclamations?'+buildQS(filters));
-    let d = await res.json();
-    setData(filterSearch(d, filters.search));
-    setLoading(false);
-  }, [filters]);
-
-  useEffect(()=>{ load(); }, [load]);
-
-  const total = data.length;
-  const na = data.filter(r=>r.statut_traitement==='NON ASSIGNE').length;
-  const ass = data.filter(r=>r.statut_traitement==='ASSIGNE').length;
-  const tr = data.filter(r=>r.statut_traitement==='TRAITE').length;
-
-  const handleDesassign = async (id_hash) => {
-    await fetch('/api/desassigner', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({id_hash}) });
-    load();
-  };
-
-  // Comptes par catégorie et par motif (NON ASSIGNÉES uniquement)
-  const { catCounts, motCounts } = useMemo(() => {
-    const catCounts = {};
-    const motCounts = {};
-    data.filter(r => r.statut_traitement === 'NON ASSIGNE').forEach(r => {
-      const cat = r.categorie_de_non_paiement;
-      const mot = r.motif_non_paiement;
-      const catKey = cat || '__NULL__';
-      const motKey = mot || '__NULL__';
-      catCounts[catKey] = (catCounts[catKey] || 0) + 1;
-      motCounts[motKey] = (motCounts[motKey] || 0) + 1;
-    });
-    return { catCounts, motCounts };
-  }, [data]);
-
-  const catOptions = Object.entries(catCounts).sort((a,b)=>b[1]-a[1]);
-  const motOptions = Object.entries(motCounts).sort((a,b)=>b[1]-a[1]);
-  const catVolume = catSelected.length > 0 ? catSelected.reduce((sum, c) => sum + (catCounts[c] || 0), 0) : null;
-  const motVolume = motSelected.length > 0 ? motSelected.reduce((sum, m) => sum + (motCounts[m] || 0), 0) : null;
+  const motSubmitting = useRef(false);
 
   const { apiFetch, showToast } = React.useContext(AppContext);
 
+  const [dispatchCounts, setDispatchCounts] = useState({ categories:[], motifs:[] });
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [rRec, rDisp] = await Promise.all([
+        apiFetch('/api/reclamations?'+buildQS(filters)+'&page='+currPage+'&per_page='+PER_PAGE),
+        apiFetch('/api/dispatch-counts?'+buildQS(filters)),
+      ]);
+      const d = await rRec.json();
+      setData(filterSearch(d.data, filters.search));
+      setTotal(d.total);
+      setBreakdown(d.counts || { non_assignees:0, assignees:0, traitees:0 });
+      setDispatchCounts(await rDisp.json());
+    } catch(e) { /* toast géré */ }
+    finally { setLoading(false); }
+  }, [filters, currPage]);
+
+  useEffect(()=>{ load(); }, [load]);
+  useEffect(()=>{ setCurrPage(1); }, [filters]);
+
+  const na  = breakdown.non_assignees;
+  const ass = breakdown.assignees;
+  const tr  = breakdown.traitees;
+
+  const totalPages = Math.max(1, Math.ceil(total / PER_PAGE));
+
+  const handleDesassign = async (id_hash) => {
+    try {
+      await apiFetch('/api/desassigner', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({id_hash}) });
+      showToast('success', 'Réclamation désassignée.');
+      load();
+    } catch(e) { /* toast géré */ }
+  };
+
+  // Comptes dispatch depuis le serveur (toutes pages, NON ASSIGNE uniquement)
+  const catOptions = dispatchCounts.categories;
+  const motOptions = dispatchCounts.motifs;
+  const catCountMap = Object.fromEntries(catOptions);
+  const motCountMap = Object.fromEntries(motOptions);
+  const catVolume = catSelected.length > 0 ? catSelected.reduce((sum, c) => sum + (catCountMap[c] || 0), 0) : null;
+  const motVolume = motSelected.length > 0 ? motSelected.reduce((sum, m) => sum + (motCountMap[m] || 0), 0) : null;
+
   const handleDispatchCat = async () => {
     if (catSelected.length===0 || !catAgent || !catNombre) return;
+    if (catSubmitting.current) return;
+    catSubmitting.current = true;
     setCatLoading(true);
     try {
       const res = await apiFetch('/api/assigner-nombre', {
@@ -579,11 +599,13 @@ function AdminGeneral() {
       setCatSelected([]); setCatNombre('');
       load();
     } catch(e) { /* toast géré */ }
-    finally { setCatLoading(false); }
+    finally { setCatLoading(false); catSubmitting.current = false; }
   };
 
   const handleDispatchMot = async () => {
     if (motSelected.length===0 || !motAgent || !motNombre) return;
+    if (motSubmitting.current) return;
+    motSubmitting.current = true;
     setMotLoading(true);
     try {
       const res = await apiFetch('/api/assigner-nombre', {
@@ -598,7 +620,7 @@ function AdminGeneral() {
       setMotSelected([]); setMotNombre('');
       load();
     } catch(e) { /* toast géré */ }
-    finally { setMotLoading(false); }
+    finally { setMotLoading(false); motSubmitting.current = false; }
   };
 
   return (
@@ -620,6 +642,15 @@ function AdminGeneral() {
         <Kpi label="Assignées" value={ass} hint="en cours" />
         <Kpi label="Traitées" value={tr} hint={total?`${Math.round(tr/total*100)}% taux`:'—'} accent />
       </div>
+      {total > PER_PAGE && (
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:12,padding:'8px 12px',background:'var(--bg-elev)',border:'1px solid var(--line)',borderRadius:8,fontSize:13}}>
+          <span style={{color:'var(--ink-4)'}}>Page <b style={{color:'var(--ink-1)'}}>{currPage}</b> sur <b style={{color:'var(--ink-1)'}}>{totalPages}</b> · {total} résultats</span>
+          <div style={{display:'flex',gap:6}}>
+            <button className="btn btn-secondary btn-sm" onClick={()=>setCurrPage(p=>Math.max(1,p-1))} disabled={currPage===1}>← Précédent</button>
+            <button className="btn btn-secondary btn-sm" onClick={()=>setCurrPage(p=>Math.min(totalPages,p+1))} disabled={currPage===totalPages}>Suivant →</button>
+          </div>
+        </div>
+      )}
 
       <Filters filters={filters} setFilters={setFilters} options={PRELOADED_FILTERS}/>
 
@@ -677,7 +708,7 @@ function AdminGeneral() {
         {na === 0 && <span style={{color:'#999', fontSize:13}}>Aucune réclamation non assignée sur cette période.</span>}
       </Card>
 
-      <Card title="Réclamations" sub={`${data.length} résultat${data.length>1?'s':''}`} flush>
+      <Card title="Réclamations" sub={`${data.length} résultat${data.length>1?'s':''} sur ${total} au total`} flush>
         {loading ? <div className="loading">Chargement…</div> : (
           <div className="table-wrap">
             <table className="tbl">
@@ -685,16 +716,7 @@ function AdminGeneral() {
                 <th>ND</th><th>Client</th><th>Date</th><th>Campagne</th><th>Catégorie</th><th>Motif</th><th>Statut</th><th>Assigné à</th><th></th>
               </tr></thead>
               <tbody>
-                {data.length > 200 && (
-                  <tr><td colSpan={9} style={{
-                    background:'#fff3cd', color:'#856404', textAlign:'center',
-                    padding:'8px 12px', fontSize:12, fontWeight:500,
-                    borderBottom:'1px solid #ffc107'
-                  }}>
-                    ⚠️ Affichage limité à 200 résultats — utilisez l'export CSV pour voir toutes les données.
-                  </td></tr>
-                )}
-                {data.slice(0,200).map(r => {
+                {data.map(r => {
                   const u = r.assigne_a ? UTILISATEURS[r.assigne_a] : null;
                   return (
                     <tr key={r.id_hash}>
@@ -902,10 +924,11 @@ function AdminCorbeille() {
     setLoading(true);
     try {
       const [r1, r2] = await Promise.all([
-        apiFetch('/api/reclamations?' + buildCorbeilleQS(), { signal }),
+        apiFetch('/api/reclamations?' + buildCorbeilleQS() + '&per_page=500', { signal }),
         apiFetch('/api/stats?' + buildStatsQS(), { signal })
       ]);
-      setData(await r1.json());
+      const d1 = await r1.json();
+      setData(d1.data || d1);
       setStats(await r2.json());
     } catch(e) {
       if (e.name !== 'AbortError' && e.message !== 'SESSION_EXPIRED') {
@@ -997,7 +1020,7 @@ function AdminCorbeille() {
                 <th>ND</th><th>Client</th><th>Motif</th><th>Appel</th><th>Niveau</th><th>Sous-motif</th><th>ID Dossier</th><th>Traité par</th><th>Date</th>
               </tr></thead>
               <tbody>
-                {data.slice(0,200).map(r=>{
+                {data.map(r=>{
                   const u = r.assigne_a ? UTILISATEURS[r.assigne_a] : null;
                   return (
                     <tr key={r.id_hash}>
@@ -1027,10 +1050,13 @@ function Dashboard() {
   const [stats, setStats] = useState(null);
   const [filters, setFilters] = useState({ annee: DEFAULT_ANNEE, mois: DEFAULT_MOIS });
   const isAdmin = CURRENT_USER.role === 'admin';
+  const { apiFetch } = React.useContext(AppContext);
 
   const load = useCallback(async () => {
-    const res = await fetch('/api/stats?'+buildQS(filters));
-    setStats(await res.json());
+    try {
+      const res = await apiFetch('/api/stats?'+buildQS(filters));
+      setStats(await res.json());
+    } catch(e) { /* toast géré */ }
   }, [filters]);
   useEffect(()=>{ load(); }, [load]);
 
@@ -1098,7 +1124,7 @@ function TraitForm({ rec, form, setForm, onSubmit }) {
             <option value="PAS DECROCHE">Pas décroché</option>
           </select>
         </Field>
-        <Field label="Niveau *">
+        <Field label="Niveau">
           <select className="select" value={form.niveau} onChange={e=>setForm({...form, niveau:e.target.value})}>
             <option value="">— Choisir —</option>
             <option value="1">Niveau 1</option>
@@ -1277,9 +1303,9 @@ function UserGeneral() {
     if (traitDu) baseQS.append('date_trait_du', traitDu);
     if (traitAu) baseQS.append('date_trait_au', traitAu);
     try {
-      const res = await apiFetch('/api/reclamations?'+baseQS.toString());
-      let d = await res.json();
-      setData(filterSearch(d, filters.search));
+      const res = await apiFetch('/api/reclamations?'+baseQS.toString()+'&per_page=500');
+      const d = await res.json();
+      setData(filterSearch(d.data || d, filters.search));
     } catch(e) { /* toast géré */ }
     finally { setLoading(false); }
   }, [filters, traitDu, traitAu, assignDu, assignAu]);
@@ -1370,14 +1396,18 @@ function App() {
   const [counts, setCounts] = useState({});
   const isAdmin = CURRENT_USER.role === 'admin';
   const titles = { general: isAdmin?"Vue d'ensemble":'Mes réclamations', corbeille:'Corbeille', dashboard:'Dashboard' };
+  const { apiFetch } = React.useContext(AppContext);
 
-  // Counts pour la sidebar
-  useEffect(() => {
-    fetch('/api/stats').then(r=>r.json()).then(s => {
-      if (isAdmin) setCounts({ general:s.non_assignees, corbeille:s.traitees });
-      else setCounts({ general:s.assignees });
-    }).catch(()=>{});
-  }, [page]);
+  const refreshCounts = useCallback(async () => {
+    try {
+      const res = await apiFetch('/api/stats');
+      const s = await res.json();
+      if (isAdmin) setCounts({ general: s.non_assignees, corbeille: s.traitees });
+      else setCounts({ general: s.assignees });
+    } catch(e) {}
+  }, [isAdmin]);
+
+  useEffect(() => { refreshCounts(); }, []);
 
   let content;
   if (isAdmin) {
