@@ -49,6 +49,7 @@ const Icon = ({ name, size = 16 }) => {
     check: 'M4 10l4 4 8-8',
     arrow: 'M4 10h12M11 5l5 5-5 5',
     settings: 'M10 13a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM10 2v2M10 16v2M4.2 4.2l1.4 1.4M14.4 14.4l1.4 1.4M2 10h2M16 10h2M4.2 15.8l1.4-1.4M14.4 5.6l1.4-1.4',
+    bell: 'M10 2a6 6 0 0 0-6 6v3l-1.5 2.5h15L16 11V8a6 6 0 0 0-6-6zM8.5 17a1.5 1.5 0 0 0 3 0',
   };
   return <svg className="ico" width={size} height={size} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d={paths[name]||paths.inbox} /></svg>;
 };
@@ -224,6 +225,122 @@ function Sidebar({ user, page, setPage, counts }) {
   );
 }
 
+// =================== Notifications ===================
+const LS_KEY = 'dxc_notif_read';
+const getReadKeys = () => { try { return JSON.parse(localStorage.getItem(LS_KEY) || '[]'); } catch(e) { return []; } };
+const saveReadKeys = (keys) => { try { localStorage.setItem(LS_KEY, JSON.stringify(keys)); } catch(e) {} };
+
+function NotifBell() {
+  const { apiFetch } = React.useContext(AppContext);
+  const [notifs, setNotifs] = useState([]);
+  const [readKeys, setReadKeys] = useState(getReadKeys);
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await apiFetch('/api/notifications');
+      setNotifs(await res.json());
+    } catch(e) {}
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    const close = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, []);
+
+  const isRead = (n) => readKeys.includes(n.key);
+  const unread = notifs.filter(n => !isRead(n)).length;
+
+  const handleOpen = () => {
+    if (!open) {
+      // Marquer toutes les notifs visibles comme lues dans localStorage
+      const allKeys = notifs.map(n => n.key);
+      const merged = [...new Set([...readKeys, ...allKeys])];
+      saveReadKeys(merged);
+      setReadKeys(merged);
+    }
+    setOpen(!open);
+  };
+
+  const typeStyle = (type) => ({
+    info:  { bg: '#e8f4fd', border: '#2196f3', dot: '#2196f3', icon: 'ℹ️' },
+    warn:  { bg: '#fff8e1', border: '#ffc107', dot: '#ffc107', icon: '⚠️' },
+    error: { bg: '#fdecea', border: '#f44336', dot: '#f44336', icon: '🔴' },
+  }[type] || { bg: '#f5f5f5', border: '#ccc', dot: '#999', icon: '•' });
+
+  return (
+    <div ref={ref} style={{ position: 'relative' }}>
+      <button onClick={handleOpen} style={{
+        position: 'relative', background: open ? 'var(--bg-sunken)' : 'none',
+        border: 'none', cursor: 'pointer', padding: '6px 8px', borderRadius: 8,
+        color: 'var(--ink-3)', display: 'flex', alignItems: 'center',
+      }}>
+        <Icon name="bell" size={18} />
+        {unread > 0 && (
+          <span style={{
+            position: 'absolute', top: 2, right: 2,
+            background: '#f44336', color: '#fff', borderRadius: 10,
+            fontSize: 10, fontWeight: 700, minWidth: 16, height: 16,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            padding: '0 3px',
+          }}>{unread > 9 ? '9+' : unread}</span>
+        )}
+      </button>
+
+      {open && (
+        <div style={{
+          position: 'absolute', top: '100%', right: 0, zIndex: 1000,
+          width: 380, maxHeight: 480, overflowY: 'auto',
+          background: '#fff', borderRadius: 12,
+          border: '1.5px solid #e8e8e8',
+          boxShadow: '0 8px 32px rgba(0,0,0,.14)', marginTop: 8,
+        }}>
+          <div style={{
+            padding: '14px 16px', borderBottom: '1px solid #eee',
+            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            position: 'sticky', top: 0, background: '#fff',
+          }}>
+            <span style={{ fontWeight: 700, fontSize: 14 }}>Notifications</span>
+            <button onClick={load} style={{
+              background: 'none', border: 'none', cursor: 'pointer',
+              fontSize: 11, color: 'var(--accent)', fontWeight: 600,
+            }}>Actualiser</button>
+          </div>
+
+          {notifs.length === 0 ? (
+            <div style={{ padding: '32px 16px', textAlign: 'center', color: '#999', fontSize: 13 }}>
+              Aucune notification
+            </div>
+          ) : notifs.map(n => {
+            const read = isRead(n);
+            const s = typeStyle(n.type);
+            return (
+              <div key={n.key} style={{
+                padding: '12px 16px',
+                background: read ? '#fff' : s.bg,
+                borderLeft: `3px solid ${read ? '#eee' : s.border}`,
+                borderBottom: '1px solid #f0f0f0',
+              }}>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                  <span style={{ fontSize: 14, flexShrink: 0 }}>{s.icon}</span>
+                  <div style={{ flex: 1, fontSize: 12, color: '#1a1a1a', lineHeight: 1.5, fontWeight: read ? 400 : 600 }}>
+                    {n.message}
+                  </div>
+                  {!read && <span style={{ width: 8, height: 8, borderRadius: '50%', background: s.dot, flexShrink: 0, marginTop: 4 }}/>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Topbar({ title, breadcrumb }) {
   const now = new Date().toLocaleString('fr-FR', { dateStyle:'medium', timeStyle:'short' });
   return (
@@ -233,6 +350,7 @@ function Topbar({ title, breadcrumb }) {
       </div>
       <div className="tb-right">
         <div className="tb-time">{now}</div>
+        <NotifBell />
       </div>
     </div>
   );

@@ -30,12 +30,12 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 USERS: dict[str, dict] = {
     "YRPV3142": {
         "nom_complet": "Alassane FOFANA",
-        "password": pwd_context.hash("xx"),
+        "password": pwd_context.hash("Mina2009"),
         "role": "admin",
     },
     "TCDD2856": {
         "nom_complet": "Agent TCDD2856",
-        "password": pwd_context.hash("xxx"),
+        "password": pwd_context.hash("Rare12@"),
         "role": "utilisateur",
     },
     "AGENT01": {"nom_complet": "Agent 01", "password": pwd_context.hash("Agent01@"), "role": "utilisateur"},

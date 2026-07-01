@@ -102,6 +102,8 @@ def _is_rate_limited(ip: str) -> bool:
     return False
 
 
+# ============================================================
+# NOTIFICATIONS
 # ── Startup ──
 @app.on_event("startup")
 async def startup():
@@ -1089,3 +1091,95 @@ async def export_csv(
         media_type="text/csv",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
+
+
+# ============================================================
+# API — NOTIFICATIONS
+# ============================================================
+
+@app.get("/api/notifications")
+async def api_notifications(request: Request):
+    """
+    Calcule les notifications à la volée depuis tb_reclamations.
+    Aucune table dédiée — état "lu" géré côté client (localStorage).
+    Admin : nouvelles données + qualité + agents inactifs + surcharge.
+    Agent : nouvelles données uniquement.
+    """
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401)
+
+    notifs = []
+    try:
+        # ── Nouvelles données (admin + agents) ──
+        row = query_db("""
+            SELECT MAX(startdate)::date AS max_date, COUNT(*) AS total
+            FROM tb_reclamations WHERE startdate IS NOT NULL
+        """)[0]
+        if row["max_date"]:
+            max_date = row["max_date"]
+            prev_cnt = query_db(
+                "SELECT COUNT(*) AS cnt FROM tb_reclamations WHERE startdate::date < %s",
+                [max_date]
+            )[0]["cnt"] or 0
+            delta = (row["total"] or 0) - prev_cnt
+            date_str = max_date.strftime("%d/%m/%Y") if hasattr(max_date, "strftime") else str(max_date)
+            notifs.append({
+                "key": f"new_data_{max_date}",
+                "type": "info",
+                "category": "new_data",
+                "message": f"Nouvelles données disponibles au {date_str} — {delta} client(s) ajouté(s)",
+            })
+
+        if user["role"] == "admin":
+            # ── Données corrompues ──
+            bad = query_db("""
+                SELECT COUNT(*) AS cnt FROM tb_reclamations
+                WHERE nd_clean IS NULL OR startdate IS NULL
+            """)[0]["cnt"] or 0
+            if bad > 0:
+                notifs.append({
+                    "key": f"quality_{bad}",
+                    "type": "warn",
+                    "category": "quality",
+                    "message": f"{bad} ligne(s) avec ND ou date manquant(e) — vérifier la source",
+                })
+
+            # ── Agents inactifs (réclamations ASSIGNE depuis +3 jours) ──
+            inactive = query_db("""
+                SELECT assigne_a, COUNT(*) AS cnt
+                FROM tb_reclamations
+                WHERE statut_traitement = 'ASSIGNE'
+                  AND date_assignation <= NOW() - INTERVAL '3 days'
+                  AND assigne_a IS NOT NULL
+                GROUP BY assigne_a
+            """)
+            for r in inactive:
+                nom = USERS.get(r["assigne_a"], {}).get("nom_complet", r["assigne_a"])
+                notifs.append({
+                    "key": f"inactive_{r['assigne_a']}",
+                    "type": "warn",
+                    "category": "agent_inactive",
+                    "message": f"{nom} — {r['cnt']} réclamation(s) en attente depuis +3 jours",
+                })
+
+            # ── Surcharge agent (> 100 réclamations ASSIGNE) ──
+            overloaded = query_db("""
+                SELECT assigne_a, COUNT(*) AS cnt
+                FROM tb_reclamations
+                WHERE statut_traitement = 'ASSIGNE' AND assigne_a IS NOT NULL
+                GROUP BY assigne_a HAVING COUNT(*) > 100
+            """)
+            for r in overloaded:
+                nom = USERS.get(r["assigne_a"], {}).get("nom_complet", r["assigne_a"])
+                notifs.append({
+                    "key": f"overload_{r['assigne_a']}",
+                    "type": "error",
+                    "category": "agent_overload",
+                    "message": f"{nom} — {r['cnt']} réclamations en attente (surcharge)",
+                })
+
+    except Exception as e:
+        logger.error(f"api_notifications — {e}")
+
+    return notifs
